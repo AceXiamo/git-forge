@@ -37,6 +37,7 @@ interface DetailsSnapshot extends Omit<GitSnapshot, 'commits'> {
 
 export class GitDetailsPanel implements WebviewViewProvider {
   private view: WebviewView | undefined
+  private maxCommits = 0
 
   constructor(private readonly context: ExtensionContext) {}
 
@@ -82,10 +83,18 @@ export class GitDetailsPanel implements WebviewViewProvider {
   private async handleMessage(message: DetailsMessage): Promise<void> {
     if (message.type === 'ready' || message.type === 'refresh')
       await this.postSnapshot()
+    if (message.type === 'loadMore')
+      await this.loadMore()
     if (message.type === 'openCommitFile')
       await this.openCommitFile(message)
     if (message.type === 'copyText')
       await this.copyText(message)
+  }
+
+  private async loadMore(): Promise<void> {
+    const pageSize = this.configuredMaxCommits()
+    this.maxCommits = Math.min(2000, this.currentMaxCommits() + pageSize)
+    await this.postSnapshot()
   }
 
   private async copyText(message: DetailsMessage): Promise<void> {
@@ -146,8 +155,17 @@ export class GitDetailsPanel implements WebviewViewProvider {
       }
     }
 
-    const maxCommits = workspace.getConfiguration('gitForge').get<number>('maxCommits', 80)
-    return decorateSnapshot(await service.snapshot(maxCommits))
+    return decorateSnapshot(await service.snapshot(this.currentMaxCommits()))
+  }
+
+  private currentMaxCommits(): number {
+    if (!this.maxCommits)
+      this.maxCommits = this.configuredMaxCommits()
+    return this.maxCommits
+  }
+
+  private configuredMaxCommits(): number {
+    return workspace.getConfiguration('gitForge').get<number>('maxCommits', 80)
   }
 
   private currentWorkspacePath(): string | undefined {

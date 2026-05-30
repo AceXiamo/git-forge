@@ -244,7 +244,11 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
   const hasWorkingRow = changed.length > 0 && !commitQuery.trim()
   const [selectedHash, setSelectedHash] = useState(snapshot.commits[0]?.hash ?? '')
   const [detailsWidth, setDetailsWidth] = useState(380)
+  const [scrollState, setScrollState] = useState({ height: 0, top: 0 })
+  const [loadingMore, setLoadingMore] = useState(false)
   const layoutRef = useRef<HTMLElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const lastLoadRequest = useRef(0)
   const selectedCommit = useMemo(
     () => visibleCommits.find(commit => commit.hash === selectedHash) ?? visibleCommits[0],
     [selectedHash, visibleCommits],
@@ -254,6 +258,80 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
     if (!visibleCommits.some(commit => commit.hash === selectedHash))
       setSelectedHash(visibleCommits[0]?.hash ?? '')
   }, [selectedHash, visibleCommits])
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element)
+      return
+
+    const update = () => {
+      setScrollState({
+        height: element.clientHeight,
+        top: element.scrollTop,
+      })
+    }
+
+    update()
+    const resizeObserver = new ResizeObserver(update)
+    resizeObserver.observe(element)
+    return () => resizeObserver.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (scrollRef.current)
+      scrollRef.current.scrollTop = 0
+
+    setLoadingMore(false)
+  }, [commitQuery])
+
+  useEffect(() => {
+    setLoadingMore(false)
+  }, [snapshot.generatedAt, snapshot.commits.length])
+
+  const virtual = useMemo(() => {
+    const rowHeight = graph.rowHeight
+    const workingRows = hasWorkingRow ? 1 : 0
+    const totalItems = workingRows + graphRows.length
+    const overscan = 8
+    const startItem = Math.max(0, Math.floor(scrollState.top / rowHeight) - overscan)
+    const endItem = Math.min(
+      totalItems,
+      Math.ceil((scrollState.top + scrollState.height) / rowHeight) + overscan,
+    )
+    const commitStart = Math.max(0, startItem - workingRows)
+    const commitEnd = Math.max(commitStart, Math.min(graphRows.length, endItem - workingRows))
+
+    return {
+      commitEnd,
+      commitStart,
+      endItem,
+      startItem,
+      totalHeight: totalItems * rowHeight,
+      workingRows,
+    }
+  }, [graph.rowHeight, graphRows.length, hasWorkingRow, scrollState.height, scrollState.top])
+
+  function handleCommitScroll(event: Event): void {
+    const element = event.currentTarget as HTMLDivElement
+    setScrollState({
+      height: element.clientHeight,
+      top: element.scrollTop,
+    })
+
+    if (commitQuery.trim())
+      return
+
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < graph.rowHeight * 8
+    if (!nearBottom || !snapshot.commits.length)
+      return
+
+    if (lastLoadRequest.current === snapshot.commits.length)
+      return
+
+    lastLoadRequest.current = snapshot.commits.length
+    setLoadingMore(true)
+    vscode.postMessage({ type: 'loadMore' })
+  }
 
   function startResize(clientX: number): void {
     const rect = layoutRef.current?.getBoundingClientRect()
@@ -308,11 +386,12 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
                 }}
               />
             </div>
-            <span className="whitespace-nowrap text-[11px] text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]">
-              {graphRows.length}
-              /
-              {snapshot.commits.length}
-            </span>
+            {loadingMore && (
+              <span className="inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap text-[11px] text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]">
+                <Icon name="refresh" className="animate-spin text-[12px]" />
+                Loading
+              </span>
+            )}
             <button
               className="inline-flex h-[26px] min-w-[26px] cursor-pointer items-center justify-center rounded border border-transparent bg-transparent px-1.5 text-[13px] text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]"
               title="Refresh"
@@ -330,23 +409,46 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
             <span className="min-w-0 overflow-hidden border-r border-[color-mix(in_srgb,var(--border)_64%,transparent)] px-2.5 text-ellipsis whitespace-nowrap">Date</span>
             <span className="min-w-0 overflow-hidden border-r border-[color-mix(in_srgb,var(--border)_64%,transparent)] px-2.5 text-ellipsis whitespace-nowrap">Hash</span>
           </div>
-          <div className="relative min-h-0 overflow-auto">
-            {hasWorkingRow && <WorkingRow changeCount={changed.length} graph={graph} />}
-            {graphRows.length
-              ? graphRows.map((row, index) => (
-                  <CommitRow
-                    key={row.commit.hash}
-                    graph={graph}
-                    index={index}
-                    row={row}
-                    selected={selectedCommit?.hash === row.commit.hash}
-                    onHover={onHover}
-                    onHoverEnd={onHoverEnd}
-                    onSelect={setSelectedHash}
-                  />
-                ))
+          <div ref={scrollRef} className="relative min-h-0 overflow-auto" onScroll={handleCommitScroll}>
+            {graphRows.length || hasWorkingRow
+              ? (
+                  <div className="relative min-w-full" style={{ height: `${virtual.totalHeight}px` }}>
+                    {hasWorkingRow && virtual.startItem <= 0 && virtual.endItem > 0 && (
+                      <WorkingRow
+                        changeCount={changed.length}
+                        graph={graph}
+                        style={{ transform: 'translateY(0px)' }}
+                      />
+                    )}
+                    {graphRows.slice(virtual.commitStart, virtual.commitEnd).map((row, offset) => {
+                      const index = virtual.commitStart + offset
+                      return (
+                        <CommitRow
+                          key={row.commit.hash}
+                          graph={graph}
+                          index={index}
+                          row={row}
+                          selected={selectedCommit?.hash === row.commit.hash}
+                          style={{ transform: `translateY(${(virtual.workingRows + index) * graph.rowHeight}px)` }}
+                          onHover={onHover}
+                          onHoverEnd={onHoverEnd}
+                          onSelect={setSelectedHash}
+                        />
+                      )
+                    })}
+                    {graphRows.length > 0 && (
+                      <GraphOverlay
+                        graph={graph}
+                        hasWorkingRow={hasWorkingRow}
+                        rows={graphRows}
+                        totalHeight={virtual.totalHeight}
+                        visibleEnd={virtual.commitEnd}
+                        visibleStart={virtual.commitStart}
+                      />
+                    )}
+                  </div>
+                )
               : <div className="grid h-full place-items-center text-center text-[var(--muted)]">{commitQuery.trim() ? 'No commits match your search.' : 'No commits yet.'}</div>}
-            {graphRows.length > 0 && <GraphOverlay graph={graph} hasWorkingRow={hasWorkingRow} rows={graphRows} />}
           </div>
         </section>
 
@@ -370,11 +472,12 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
 interface WorkingRowProps {
   changeCount: number
   graph: GraphLayout
+  style?: Record<string, string | number>
 }
 
-function WorkingRow({ changeCount, graph }: WorkingRowProps) {
+function WorkingRow({ changeCount, graph, style }: WorkingRowProps) {
   return (
-    <article className="relative z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] hover:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden">
+    <article className="absolute top-0 right-0 left-0 z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] hover:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden" style={style}>
       <div className="relative flex min-w-0 items-center gap-[5px] overflow-visible py-0 pr-0 pl-3" />
       <div className="relative h-[var(--graph-row-height)] overflow-visible p-0">
         <div className="relative h-[var(--graph-row-height)] w-[var(--graph-col-width)] min-w-[var(--graph-col-width)]">
@@ -399,12 +502,13 @@ interface CommitRowProps {
   index: number
   graph: GraphLayout
   selected: boolean
+  style?: Record<string, string | number>
   onHover: (state: HoverState) => void
   onHoverEnd: () => void
   onSelect: (hash: string) => void
 }
 
-function CommitRow({ row, index, graph, selected, onHover, onHoverEnd, onSelect }: CommitRowProps) {
+function CommitRow({ row, index, graph, selected, style, onHover, onHoverEnd, onSelect }: CommitRowProps) {
   const commit = row.commit
   const badge = row.branchBadge
   const fileCount = commit.filesChanged
@@ -414,12 +518,13 @@ function CommitRow({ row, index, graph, selected, onHover, onHoverEnd, onSelect 
   return (
     <article
       className={cn(
-        'group relative z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] cursor-pointer grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] outline-none hover:bg-[var(--hover)] focus-visible:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden',
+        'group absolute top-0 right-0 left-0 z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] cursor-pointer grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] outline-none hover:bg-[var(--hover)] focus-visible:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden',
         index % 2 === 1 && !selected && 'bg-[color-mix(in_srgb,var(--bg)_94%,#12161d)]',
         selected && 'bg-[color-mix(in_srgb,var(--selected)_68%,var(--bg))]',
       )}
       data-commit={commit.hash}
       role="button"
+      style={style}
       tabIndex={0}
       aria-pressed={selected}
       onClick={() => onSelect(commit.hash)}
@@ -473,16 +578,22 @@ interface GraphOverlayProps {
   rows: GraphRow[]
   hasWorkingRow: boolean
   graph: GraphLayout
+  totalHeight: number
+  visibleEnd: number
+  visibleStart: number
 }
 
-function GraphOverlay({ rows, hasWorkingRow, graph }: GraphOverlayProps) {
+function GraphOverlay({ rows, hasWorkingRow, graph, totalHeight, visibleEnd, visibleStart }: GraphOverlayProps) {
   const rowHeight = graph.rowHeight
   const offsetY = hasWorkingRow ? rowHeight : 0
-  const height = offsetY + rows.length * rowHeight
+  const height = totalHeight
   const paths: Array<{ className: string, d: string }> = []
   const nodes: Array<{ row: GraphRow, x: number, y: number, className: string }> = []
 
   rows.forEach((row, index) => {
+    if (index < visibleStart || index >= visibleEnd)
+      return
+
     const y = offsetY + index * rowHeight + rowHeight / 2
     const laneClass = `lane-${row.lane % 3}`
     const forkTargets = new Set(row.connectors
