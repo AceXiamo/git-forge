@@ -1,29 +1,19 @@
-import altArrowDownIcon from '@iconify/icons-solar/alt-arrow-down-linear'
-import altArrowRightIcon from '@iconify/icons-solar/alt-arrow-right-linear'
+import altArrowDownIcon from '@iconify/icons-solar/alt-arrow-down-line-duotone'
+import altArrowRightIcon from '@iconify/icons-solar/alt-arrow-right-line-duotone'
 import archiveIcon from '@iconify/icons-solar/archive-line-duotone'
-import branchingIcon from '@iconify/icons-solar/branching-paths-down-bold'
-import checklistIcon from '@iconify/icons-solar/checklist-outline'
-import cloudIcon from '@iconify/icons-solar/cloud-linear'
-import codeSquareIcon from '@iconify/icons-solar/code-square-linear'
-import copyIcon from '@iconify/icons-solar/copy-outline'
+import branchingIcon from '@iconify/icons-solar/branching-paths-down-line-duotone'
+import checklistIcon from '@iconify/icons-solar/checklist-line-duotone'
+import codeSquareIcon from '@iconify/icons-solar/code-square-line-duotone'
+import copyIcon from '@iconify/icons-solar/copy-line-duotone'
 import documentTextIcon from '@iconify/icons-solar/document-text-line-duotone'
-import downloadIcon from '@iconify/icons-solar/download-minimalistic-linear'
-import fileTextIcon from '@iconify/icons-solar/file-text-linear'
-import folderIcon from '@iconify/icons-solar/folder-linear'
-import folderOpenIcon from '@iconify/icons-solar/folder-open-outline'
-import folderPathIcon from '@iconify/icons-solar/folder-path-connect-bold-duotone'
+import fileTextIcon from '@iconify/icons-solar/file-text-line-duotone'
+import folderIcon from '@iconify/icons-solar/folder-line-duotone'
+import folderOpenIcon from '@iconify/icons-solar/folder-open-line-duotone'
 import folderWithFilesIcon from '@iconify/icons-solar/folder-with-files-line-duotone'
-import galleryIcon from '@iconify/icons-solar/gallery-wide-bold-duotone'
-import graphIcon from '@iconify/icons-solar/graph-linear'
-import historyIcon from '@iconify/icons-solar/history-linear'
-import homeIcon from '@iconify/icons-solar/home-angle-linear'
-import magicIcon from '@iconify/icons-solar/magic-stick-2-bold-duotone'
-import searchIcon from '@iconify/icons-solar/minimalistic-magnifer-linear'
-import penIcon from '@iconify/icons-solar/pen-new-square-line-duotone'
-import refreshIcon from '@iconify/icons-solar/refresh-circle-linear'
-import rocketIcon from '@iconify/icons-solar/rocket-2-outline'
-import soundwaveIcon from '@iconify/icons-solar/soundwave-square-outline'
-import widgetIcon from '@iconify/icons-solar/widget-linear'
+import galleryIcon from '@iconify/icons-solar/gallery-wide-line-duotone'
+import historyIcon from '@iconify/icons-solar/history-line-duotone'
+import searchIcon from '@iconify/icons-solar/minimalistic-magnifer-line-duotone'
+import refreshIcon from '@iconify/icons-solar/refresh-circle-line-duotone'
 import { render } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import './styles.css'
@@ -154,10 +144,16 @@ type GraphConnector = {
 interface GraphRow {
   commit: DetailsCommit
   lane: number
+  branchBadge?: BranchBadge
   before: Array<string | undefined>
   after: Array<string | undefined>
   connectors: GraphConnector[]
   columns: number
+}
+
+interface BranchBadge {
+  label: string
+  latest: boolean
 }
 
 interface GraphLayout {
@@ -193,27 +189,17 @@ const solarIcons = {
   checklist: checklistIcon,
   chevronDown: altArrowDownIcon,
   chevronRight: altArrowRightIcon,
-  cloud: cloudIcon,
   code: codeSquareIcon,
   copy: copyIcon,
   document: documentTextIcon,
-  download: downloadIcon,
   file: fileTextIcon,
   folder: folderIcon,
   folderOpen: folderOpenIcon,
   files: folderWithFilesIcon,
-  folderPath: folderPathIcon,
   image: galleryIcon,
-  graph: graphIcon,
   history: historyIcon,
-  home: homeIcon,
-  magic: magicIcon,
   search: searchIcon,
-  pen: penIcon,
   refresh: refreshIcon,
-  rocket: rocketIcon,
-  soundwave: soundwaveIcon,
-  widget: widgetIcon,
 } satisfies Record<string, SolarIconData>
 
 function Icon({ name, className }: { name: keyof typeof solarIcons, className?: string }) {
@@ -243,25 +229,31 @@ interface ReadyViewProps {
 }
 
 function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
-  const branch = snapshot.branch
   const unstaged = snapshot.changes.filter(change => !change.conflicted && (change.kind === 'untracked' || change.worktree !== ' '))
   const staged = snapshot.changes.filter(change => change.staged && !change.conflicted)
   const changed = [...staged, ...unstaged, ...snapshot.conflicts]
-  const graphRows = useMemo(() => buildGraphRows(snapshot.commits), [snapshot.commits])
+  const [commitQuery, setCommitQuery] = useState('')
+  const visibleCommits = useMemo(
+    () => commitQuery.trim()
+      ? snapshot.commits.filter(commit => commitMatchesSearch(commit, commitQuery))
+      : snapshot.commits,
+    [commitQuery, snapshot.commits],
+  )
+  const graphRows = useMemo(() => buildGraphRows(visibleCommits), [visibleCommits])
   const graph = useMemo(() => graphLayout(graphRows), [graphRows])
-  const hasWorkingRow = changed.length > 0
+  const hasWorkingRow = changed.length > 0 && !commitQuery.trim()
   const [selectedHash, setSelectedHash] = useState(snapshot.commits[0]?.hash ?? '')
   const [detailsWidth, setDetailsWidth] = useState(380)
   const layoutRef = useRef<HTMLElement>(null)
   const selectedCommit = useMemo(
-    () => snapshot.commits.find(commit => commit.hash === selectedHash) ?? snapshot.commits[0],
-    [selectedHash, snapshot.commits],
+    () => visibleCommits.find(commit => commit.hash === selectedHash) ?? visibleCommits[0],
+    [selectedHash, visibleCommits],
   )
 
   useEffect(() => {
-    if (!snapshot.commits.some(commit => commit.hash === selectedHash))
-      setSelectedHash(snapshot.commits[0]?.hash ?? '')
-  }, [selectedHash, snapshot.commits])
+    if (!visibleCommits.some(commit => commit.hash === selectedHash))
+      setSelectedHash(visibleCommits[0]?.hash ?? '')
+  }, [selectedHash, visibleCommits])
 
   function startResize(clientX: number): void {
     const rect = layoutRef.current?.getBoundingClientRect()
@@ -271,8 +263,7 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
     const minGraphWidth = 420
     const minDetailsWidth = 280
     const splitterWidth = 6
-    const railWidth = 36
-    const available = rect.width - railWidth - splitterWidth
+    const available = rect.width - splitterWidth
     const maxDetailsWidth = Math.max(minDetailsWidth, available - minGraphWidth)
     const minWidth = Math.min(minDetailsWidth, maxDetailsWidth)
 
@@ -296,82 +287,39 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
   }
 
   return (
-    <div className="grid h-screen min-h-[360px] grid-rows-[auto_auto_minmax(0,1fr)] bg-[color-mix(in_srgb,var(--bg)_94%,#17141f)]">
-      <header className="grid min-h-[42px] grid-cols-[minmax(280px,1fr)_auto_minmax(220px,1fr)] items-center gap-3 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_88%,#17141f)] px-2.5 py-1.5 max-[980px]:grid-cols-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <button className="inline-flex min-h-[26px] w-7 min-w-7 cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent p-0 text-[15px] text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="GitHub">
-            <Icon name="code" />
-          </button>
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap font-bold">{snapshot.repoName}</span>
-          <Icon name="chevronRight" className="text-[11px] text-[var(--muted)]" />
-          <span className="overflow-hidden text-ellipsis whitespace-nowrap font-bold">{branch.current}</span>
-          <span className="inline-flex min-h-5 max-w-full items-center whitespace-nowrap rounded-full border border-[color-mix(in_srgb,var(--blue)_50%,transparent)] px-[7px] text-[11px] text-[var(--blue)]">{branch.upstream || 'local'}</span>
-        </div>
-        <div className="flex min-w-0 items-center justify-center gap-2 max-[980px]:justify-start">
-          <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" data-action="refresh" onClick={() => vscode.postMessage({ type: 'refresh' })}>
-            <Icon name="refresh" />
-            <span>Fetch</span>
-          </button>
-          <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-[color-mix(in_srgb,var(--blue)_45%,var(--border))] bg-transparent px-2 py-0.5 text-[var(--blue)] hover:bg-[var(--hover)] hover:text-[var(--fg)]">
-            <Icon name="pen" />
-            <span className="[font-family:var(--vscode-editor-font-family)]">1</span>
-          </button>
-          <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Pull">
-            <Icon name="download" />
-          </button>
-        </div>
-        <div className="flex min-w-0 items-center justify-end gap-2 max-[980px]:justify-start">
-          <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Launch">
-            <Icon name="rocket" />
-          </button>
-          <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Graph">
-            <Icon name="graph" />
-          </button>
-          <span className="inline-flex min-h-5 max-w-full items-center whitespace-nowrap rounded-full border border-[var(--border)] px-[7px] text-[11px] text-[var(--muted)]">PRO</span>
-        </div>
-      </header>
-
-      <section className="grid min-h-[42px] grid-cols-[auto_auto_minmax(0,1fr)_auto_auto_auto] items-center gap-[7px] border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_76%,#17141f)] px-2.5 py-1.5 max-[980px]:grid-cols-1">
-        <span className="inline-flex items-center gap-1 whitespace-nowrap text-[var(--muted)]">
-          <span>All</span>
-          <Icon name="chevronDown" className="text-[11px]" />
-        </span>
-        <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-[color-mix(in_srgb,var(--blue)_45%,var(--border))] bg-transparent px-2 py-0.5 text-[var(--blue)] hover:bg-[var(--hover)] hover:text-[var(--fg)]">
-          <Icon name="magic" />
-        </button>
-        <input className="h-[30px] w-full min-w-0 rounded-[5px] border border-[var(--border)] bg-[var(--input)] px-2.5 text-[var(--fg)] outline-none" placeholder="Search commits using natural language (↑↓ for history), e.g. my commits from last week" />
-        <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Split">
-          <Icon name="widget" />
-        </button>
-        <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Panel">
-          <Icon name="widget" />
-        </button>
-        <button className="inline-flex min-h-[26px] cursor-pointer items-center justify-center gap-[5px] whitespace-nowrap rounded-[5px] border border-transparent bg-transparent px-2 py-0.5 text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]" title="Layout">
-          <Icon name="widget" />
-        </button>
-      </section>
-
+    <div className="grid h-screen min-h-[360px] bg-[color-mix(in_srgb,var(--bg)_94%,#17141f)]">
       <main
         ref={layoutRef}
         className="grid min-h-0"
-        style={{ gridTemplateColumns: `36px minmax(360px, 1fr) 6px minmax(280px, ${detailsWidth}px)` }}
+        style={{ gridTemplateColumns: `minmax(360px, 1fr) 6px minmax(280px, ${detailsWidth}px)` }}
       >
-        <nav className="grid content-start justify-items-center gap-3 border-r border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_90%,#17141f)] py-3 text-[var(--muted)]">
-          <span className="grid h-[26px] w-[26px] place-items-center rounded-[5px]"><Icon name="home" /></span>
-          <span className="grid h-[26px] w-[26px] place-items-center rounded-[5px]"><Icon name="cloud" /></span>
-          <span className="grid h-[26px] w-[26px] place-items-center rounded-[5px] bg-[var(--success)] text-[#07150e]"><Icon name="soundwave" /></span>
-          <span className="grid h-[26px] w-[26px] place-items-center rounded-[5px]"><Icon name="branch" /></span>
-          <span className="grid h-[26px] w-[26px] place-items-center rounded-[5px]"><Icon name="folderPath" /></span>
-        </nav>
-
-        <section className="grid min-h-0 min-w-0 grid-rows-[74px_auto_minmax(0,1fr)] overflow-hidden">
-          <div className="relative min-h-[74px] overflow-hidden border-b border-[var(--border)] bg-[linear-gradient(90deg,transparent_0,transparent_98%,color-mix(in_srgb,var(--border)_50%,transparent)_100%),color-mix(in_srgb,var(--bg)_88%,#17141f)] bg-[length:42px_100%]">
-            <div className="absolute right-[26px] bottom-[13px] flex h-12 items-end gap-[3px]">
-              {snapshot.commits.slice(0, 28).map((commit, index) => {
-                const height = 8 + ((commit.subject.length + index * 7) % 38)
-                return <span key={`${commit.hash}-${index}`} className="w-1 rounded-t-full bg-[color-mix(in_srgb,var(--success)_80%,var(--blue))] opacity-85" style={{ height: `${height}px` }} />
-              })}
+        <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
+          <div className="grid min-h-[38px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_76%,#17141f)] px-2 py-1.5">
+            <div className="relative min-w-0">
+              <Icon name="search" className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-[12px] text-[var(--muted)]" />
+              <input
+                className="h-[26px] w-full min-w-0 rounded border border-transparent bg-[var(--input)] pr-2 pl-7 text-[12px] text-[var(--fg)] outline-none focus:border-[color-mix(in_srgb,var(--blue)_58%,transparent)]"
+                placeholder="Search commits, authors, files, hashes..."
+                value={commitQuery}
+                onInput={event => setCommitQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape')
+                    setCommitQuery('')
+                }}
+              />
             </div>
+            <span className="whitespace-nowrap text-[11px] text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]">
+              {graphRows.length}
+              /
+              {snapshot.commits.length}
+            </span>
+            <button
+              className="inline-flex h-[26px] min-w-[26px] cursor-pointer items-center justify-center rounded border border-transparent bg-transparent px-1.5 text-[13px] text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--fg)]"
+              title="Refresh"
+              onClick={() => vscode.postMessage({ type: 'refresh' })}
+            >
+              <Icon name="refresh" />
+            </button>
           </div>
           <div className="grid min-h-[34px] grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_72%,#17141f)] text-[11px] font-bold text-[var(--muted)] uppercase max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden">
             <span className="min-w-0 overflow-hidden border-r border-[color-mix(in_srgb,var(--border)_64%,transparent)] px-2.5 text-ellipsis whitespace-nowrap">Branch / Tag</span>
@@ -397,7 +345,7 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
                     onSelect={setSelectedHash}
                   />
                 ))
-              : <div className="grid h-screen place-items-center text-center text-[var(--muted)]">No commits yet.</div>}
+              : <div className="grid h-full place-items-center text-center text-[var(--muted)]">{commitQuery.trim() ? 'No commits match your search.' : 'No commits yet.'}</div>}
             {graphRows.length > 0 && <GraphOverlay graph={graph} hasWorkingRow={hasWorkingRow} rows={graphRows} />}
           </div>
         </section>
@@ -438,7 +386,7 @@ function WorkingRow({ changeCount, graph }: WorkingRowProps) {
         </div>
       </div>
       <div className="min-w-0 overflow-hidden px-2.5 font-extrabold text-ellipsis whitespace-nowrap italic">Working Changes</div>
-      <div className="min-w-0 overflow-hidden px-2.5 font-semibold text-ellipsis whitespace-nowrap text-[var(--muted)]" />
+      <div className="min-w-0 overflow-hidden px-2.5 text-ellipsis whitespace-nowrap text-[var(--muted)]" />
       <div className="min-w-0 overflow-hidden px-2.5 text-xs text-ellipsis whitespace-nowrap text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]">{changeCount}</div>
       <div className="min-w-0 overflow-hidden px-2.5 text-xs text-ellipsis whitespace-nowrap text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]" />
       <div className="min-w-0 overflow-hidden px-2.5 text-xs text-ellipsis whitespace-nowrap text-[var(--muted)] [font-family:var(--vscode-editor-font-family)]" />
@@ -458,7 +406,7 @@ interface CommitRowProps {
 
 function CommitRow({ row, index, graph, selected, onHover, onHoverEnd, onSelect }: CommitRowProps) {
   const commit = row.commit
-  const label = commitLabel(row, index)
+  const badge = row.branchBadge
   const fileCount = commit.filesChanged
   const laneClass = `lane-${row.lane % 3}`
   const lane = laneToken(laneClass)
@@ -466,7 +414,7 @@ function CommitRow({ row, index, graph, selected, onHover, onHoverEnd, onSelect 
   return (
     <article
       className={cn(
-        'relative z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] cursor-pointer grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] outline-none hover:bg-[var(--hover)] focus-visible:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden',
+        'group relative z-[1] grid h-[var(--graph-row-height)] min-h-[var(--graph-row-height)] cursor-pointer grid-cols-[210px_var(--graph-col-width)_minmax(300px,1fr)_180px_92px_150px_96px] items-center border-b border-[color-mix(in_srgb,var(--border)_32%,transparent)] bg-[color-mix(in_srgb,var(--bg)_97%,#12161d)] outline-none hover:bg-[var(--hover)] focus-visible:bg-[var(--hover)] max-[980px]:grid-cols-[150px_116px_minmax(220px,1fr)_120px_62px_96px] max-[980px]:[&>*:last-child]:hidden',
         index % 2 === 1 && !selected && 'bg-[color-mix(in_srgb,var(--bg)_94%,#12161d)]',
         selected && 'bg-[color-mix(in_srgb,var(--selected)_68%,var(--bg))]',
       )}
@@ -486,18 +434,27 @@ function CommitRow({ row, index, graph, selected, onHover, onHoverEnd, onSelect 
       onMouseMove={event => onHover({ commit, x: event.clientX, y: event.clientY })}
     >
       <div className="relative flex min-w-0 items-center gap-[5px] overflow-visible py-0 pr-0 pl-3">
-        {label && (
+        {badge && (
           <>
-            <span className={cn('relative z-[1] inline-block min-h-[19px] max-w-36 flex-[0_1_auto] truncate rounded px-1.5 align-middle text-[11px] leading-[19px] font-bold text-[#e7f6ff]', lane.pill)}>{label}</span>
-            <span className={cn('h-px min-w-0 flex-1 opacity-50', lane.connector)} />
+            <span
+              className={cn(
+                'relative z-[1] inline-block min-h-[19px] max-w-36 flex-[0_1_auto] truncate rounded-xs px-1.5 align-middle text-[11px] leading-[19px] text-[#e7f6ff] transition-opacity',
+                lane.pill,
+                !badge.latest && 'opacity-0 group-hover:opacity-45 group-focus-visible:opacity-45',
+              )}
+              title={badge.latest ? badge.label : `${badge.label} (not latest)`}
+            >
+              {badge.label}
+            </span>
+            {badge.latest && <span className={cn('h-px min-w-0 flex-1 opacity-50', lane.connector)} />}
           </>
         )}
       </div>
       <div className="relative h-[var(--graph-row-height)] overflow-visible p-0">
         <LogBackdrop className={laneClass} left={graph.xForLane(row.lane) - graph.nodeOuter / 2} />
       </div>
-      <div className="min-w-0 overflow-hidden px-2.5 font-semibold text-ellipsis whitespace-nowrap" title={commit.subject}>{commit.subject || '(no subject)'}</div>
-      <div className="min-w-0 overflow-hidden px-2.5 font-semibold text-ellipsis whitespace-nowrap text-[var(--muted)]" title={commit.authorEmail}>{commit.author}</div>
+      <div className="min-w-0 overflow-hidden px-2.5 text-ellipsis whitespace-nowrap" title={commit.subject}>{commit.subject || '(no subject)'}</div>
+      <div className="min-w-0 overflow-hidden px-2.5 text-ellipsis whitespace-nowrap text-[var(--muted)]" title={commit.authorEmail}>{commit.author}</div>
       <div className="flex min-w-0 items-center gap-1 overflow-hidden px-2.5 text-xs text-ellipsis whitespace-nowrap text-[var(--muted)]">
         <Icon name="files" className="text-[11px]" />
         <span className="[font-family:var(--vscode-editor-font-family)]">{fileCount}</span>
@@ -531,9 +488,9 @@ function GraphOverlay({ rows, hasWorkingRow, graph }: GraphOverlayProps) {
     const forkTargets = new Set(row.connectors
       .filter(connector => connector.kind === 'fork' && connector.newLane)
       .map(connector => connector.to))
-    const label = commitLabel(row, index)
+    const badge = row.branchBadge
 
-    if (label) {
+    if (badge?.latest) {
       const x = graph.xForLane(row.lane)
       paths.push({
         className: `graph-line branch-link ${laneClass}`,
@@ -635,7 +592,7 @@ function CommitDetailsPane({ commit }: { commit: DetailsCommit | undefined }) {
   const refLabel = selectedCommit.decorations.find(item => item !== 'HEAD') || currentBranch()
   const normalizedQuery = fileQuery.trim().toLowerCase()
   const visibleFiles = normalizedQuery
-    ? selectedCommit.files.filter(file => file.path.toLowerCase().includes(normalizedQuery))
+    ? selectedCommit.files.filter(file => fileMatchesSearch(file, fileQuery))
     : selectedCommit.files
   const fileTree = buildFileTree(visibleFiles)
   const parentHash = selectedCommit.parents[0] || ''
@@ -688,39 +645,39 @@ function CommitDetailsPane({ commit }: { commit: DetailsCommit | undefined }) {
         </section>
 
         <section className="mt-2.5 shrink-0 border-t border-[color-mix(in_srgb,var(--border)_45%,transparent)] pt-2.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+          <div className="flex min-w-0 items-center gap-2 text-[12px]">
             <button
-              className="inline-flex cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-1 py-0 text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--fg)] focus-visible:bg-[var(--hover)] focus-visible:text-[var(--fg)]"
+              className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded border-0 bg-transparent px-1 py-0 text-[var(--muted)] outline-none hover:bg-[var(--hover)] hover:text-[var(--fg)] focus-visible:bg-[var(--hover)] focus-visible:text-[var(--fg)]"
               title="Copy commit hash"
               onClick={copyHash}
             >
               <Icon name="copy" className="text-[11px]" />
               <span className="[font-family:var(--vscode-editor-font-family)]">{commit.shortHash}</span>
             </button>
-            <span className="inline-flex min-w-0 items-center gap-1 truncate font-semibold text-[var(--blue)]">
+            <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate font-semibold text-[var(--blue)]">
               <Icon name="branch" className="text-[12px]" />
               <span className="min-w-0 truncate">{refLabel}</span>
             </span>
-            <span className="text-[var(--success)]">
+            <span className="ml-auto shrink-0 text-[var(--success)]">
               +
               {commit.additions}
             </span>
-            <span className="text-[var(--blue)]">
+            <span className="shrink-0 text-[var(--blue)]">
               ~
               {commit.filesChanged}
             </span>
-            <span className="text-[#d86f7b]">
+            <span className="shrink-0 text-[#d86f7b]">
               -
               {commit.deletions}
             </span>
-            <span className="inline-flex items-center gap-1 text-[var(--muted)]">
+            <span className="inline-flex shrink-0 items-center gap-1 text-[var(--muted)]">
               <Icon name="files" className="text-[12px]" />
               <span className="[font-family:var(--vscode-editor-font-family)]">{commit.files.length}</span>
             </span>
             {prNumber && (
-              <span className="inline-flex items-center gap-1 font-semibold text-[var(--success)]">
+              <span className="inline-flex min-w-0 shrink items-center gap-1 truncate font-semibold text-[var(--success)]">
                 <Icon name="branch" className="text-[12px]" />
-                <span>
+                <span className="truncate">
                   PR #
                   {prNumber}
                 </span>
@@ -969,6 +926,97 @@ function listDirectoryPaths(files: DetailsCommitFile[]): string[] {
   return [...directories]
 }
 
+function commitMatchesSearch(commit: DetailsCommit, query: string): boolean {
+  const tokens = searchTokens(query)
+  if (!tokens.length)
+    return true
+
+  return tokens.every(token => commitMatchesToken(commit, token))
+}
+
+function commitMatchesToken(commit: DetailsCommit, token: string): boolean {
+  const scoped = scopedToken(token)
+  if (scoped) {
+    const [scope, value] = scoped
+    if (!value)
+      return true
+
+    if (['author', 'a'].includes(scope))
+      return includesSearch(`${commit.author} ${commit.authorEmail}`, value)
+    if (['file', 'path', 'f'].includes(scope))
+      return commit.files.some(file => includesSearch(file.path, value))
+    if (['hash', 'sha', 'h'].includes(scope))
+      return includesSearch(`${commit.hash} ${commit.shortHash}`, value)
+    if (['branch', 'tag', 'ref', 'b'].includes(scope))
+      return includesSearch(commit.decorations.join(' '), value)
+    if (['message', 'msg', 'subject', 's'].includes(scope))
+      return includesSearch(commit.subject, value)
+    if (['date', 'time', 'd'].includes(scope))
+      return includesSearch(`${commit.relativeDate} ${commit.authorDate}`, value)
+  }
+
+  return includesSearch(commitSearchText(commit), token)
+}
+
+function commitSearchText(commit: DetailsCommit): string {
+  return [
+    commit.hash,
+    commit.shortHash,
+    commit.subject,
+    commit.author,
+    commit.authorEmail,
+    commit.relativeDate,
+    commit.authorDate,
+    commit.decorations.join(' '),
+    commit.files.map(file => `${file.path} ${file.status} +${file.additions} -${file.deletions}`).join(' '),
+  ].join(' ')
+}
+
+function fileMatchesSearch(file: DetailsCommitFile, query: string): boolean {
+  const tokens = searchTokens(query)
+  if (!tokens.length)
+    return true
+
+  return tokens.every(token => fileMatchesToken(file, token))
+}
+
+function fileMatchesToken(file: DetailsCommitFile, token: string): boolean {
+  const scoped = scopedToken(token)
+  if (scoped) {
+    const [scope, value] = scoped
+    if (!value)
+      return true
+
+    if (['status', 'st'].includes(scope))
+      return includesSearch(file.status, value)
+    if (['ext', 'extension'].includes(scope))
+      return includesSearch(fileExtension(file.path), value)
+    if (['path', 'file', 'f'].includes(scope))
+      return includesSearch(file.path, value)
+  }
+
+  return includesSearch(`${file.path} ${file.status} +${file.additions} -${file.deletions} ${fileExtension(file.path)}`, token)
+}
+
+function searchTokens(query: string): string[] {
+  return query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+function scopedToken(token: string): [string, string] | undefined {
+  const index = token.indexOf(':')
+  if (index <= 0)
+    return undefined
+  return [token.slice(0, index), token.slice(index + 1)]
+}
+
+function includesSearch(value: string, query: string): boolean {
+  return value.toLowerCase().includes(query)
+}
+
 function fileExtension(filePath: string): string {
   const name = filePath.split('/').pop() || filePath
   const extension = name.includes('.') ? name.split('.').pop() || '' : ''
@@ -1143,14 +1191,14 @@ function ordinalSuffix(value: number): string {
   return 'th'
 }
 
-function commitLabel(row: GraphRow, index: number) {
-  const labels = row.commit.decorations
+function latestBranchLabel(commit: DetailsCommit, index: number): string {
+  const labels = commit.decorations
     .filter(item => item !== 'HEAD')
     .slice(0, 2)
-
-  return labels.find(item => item === currentBranch() || item.includes(`/${currentBranch()}`))
+  const current = currentBranch()
+  return labels.find(item => item === current || item.includes(`/${current}`))
     || labels[0]
-    || (index === 0 ? currentBranch() : '')
+    || (index === 0 ? current : '')
 }
 
 let branchName = ''
@@ -1161,9 +1209,10 @@ function currentBranch() {
 
 function buildGraphRows(commits: DetailsCommit[]): GraphRow[] {
   const active: Array<string | undefined> = []
+  const branchLabels: Array<string | undefined> = []
   const rows: GraphRow[] = []
 
-  commits.forEach((commit) => {
+  commits.forEach((commit, index) => {
     let lane = active.indexOf(commit.hash)
     if (lane === -1) {
       lane = firstFreeLane(active)
@@ -1172,9 +1221,19 @@ function buildGraphRows(commits: DetailsCommit[]): GraphRow[] {
 
     const before = active.slice()
     const after = active.slice()
+    const latestLabel = latestBranchLabel(commit, index)
+    const inheritedLabel = branchLabels[lane]
+    const branchBadge = latestLabel
+      ? { label: latestLabel, latest: true }
+      : inheritedLabel
+        ? { label: inheritedLabel, latest: false }
+        : undefined
     const parents = commit.parents || []
     const primary = parents[0]
     const connectors: GraphConnector[] = []
+
+    if (latestLabel)
+      branchLabels[lane] = latestLabel
     const duplicateLanes = active
       .map((value, index) => ({ value, index }))
       .filter(item => item.value === commit.hash && item.index !== lane)
@@ -1204,6 +1263,7 @@ function buildGraphRows(commits: DetailsCommit[]): GraphRow[] {
     rows.push({
       commit,
       lane,
+      branchBadge,
       before,
       after: after.slice(),
       connectors,
@@ -1214,6 +1274,7 @@ function buildGraphRows(commits: DetailsCommit[]): GraphRow[] {
     after.forEach((value, index) => {
       active[index] = value
     })
+    branchLabels.length = active.length
   })
 
   return rows

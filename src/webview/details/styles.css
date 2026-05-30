@@ -15,9 +15,9 @@
   --accent: var(--vscode-button-background);
   --accent-fg: var(--vscode-button-foreground);
   --success: #4fa078;
-  --blue: #4aa7d9;
-  --violet: #9b7bd8;
-  --orange: #d99b45;
+  --blue: #1559b6;
+  --violet: #63208d;
+  --orange: #8d237f;
   --danger: var(--vscode-errorForeground);
 }
 
