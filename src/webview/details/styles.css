@@ -40,6 +40,135 @@ textarea {
   font: inherit;
 }
 
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.soft-button,
+.primary-button,
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.soft-button {
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--panel) 80%, #17141f);
+  color: var(--fg);
+}
+
+.soft-button:hover {
+  background: var(--hover);
+}
+
+.primary-button {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.danger-button {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.merge-scroll {
+  scrollbar-color: color-mix(in srgb, var(--blue) 72%, transparent) transparent;
+}
+
+.merge-code-block {
+  min-height: 20px;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: normal;
+}
+
+.merge-conflict-block {
+  position: relative;
+  margin: 8px -8px;
+  border: 1px solid color-mix(in srgb, var(--orange) 46%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--orange) 14%, transparent);
+}
+
+.merge-conflict-block.from-left {
+  border-right-color: color-mix(in srgb, var(--orange) 72%, transparent);
+}
+
+.merge-conflict-block.from-right {
+  border-left-color: color-mix(in srgb, var(--orange) 72%, transparent);
+}
+
+.merge-conflict-block .merge-code-block {
+  padding: 8px;
+}
+
+.merge-gutter-actions {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 3px;
+  background: color-mix(in srgb, var(--orange) 42%, var(--panel));
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  transform: translateY(-50%);
+}
+
+.merge-gutter-actions.right-edge {
+  right: 0;
+  border-radius: 3px 0 0 3px;
+}
+
+.merge-gutter-actions.left-edge {
+  left: 0;
+  border-radius: 0 3px 3px 0;
+}
+
+.merge-gutter-actions button {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.merge-gutter-actions button:hover {
+  background: color-mix(in srgb, var(--fg) 16%, transparent);
+}
+
 .log-backdrop {
   position: absolute;
   z-index: 0;

@@ -72,6 +72,24 @@
         "title": "Show Commit in Terminal",
         "category": "Git Forge",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "git-forge.sync",
+        "title": "Sync with Upstream",
+        "category": "Git Forge",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "git-forge.openConflicts",
+        "title": "Open Conflict Resolver",
+        "category": "Git Forge",
+        "icon": "$(merge)"
+      },
+      {
+        "command": "git-forge.abortMerge",
+        "title": "Abort Current Git Operation",
+        "category": "Git Forge",
+        "icon": "$(debug-reverse-continue)"
       }
     ],
     "keybindings": [
@@ -122,6 +140,16 @@
     },
     "menus": {
       "view/title": [
+        {
+          "command": "git-forge.sync",
+          "when": "view == gitForge.history",
+          "group": "navigation"
+        },
+        {
+          "command": "git-forge.openConflicts",
+          "when": "view == gitForge.history",
+          "group": "navigation"
+        },
         {
           "command": "git-forge.refreshHistory",
           "when": "view == gitForge.history",

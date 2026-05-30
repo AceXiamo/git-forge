@@ -16,6 +16,8 @@ export interface ChoiceConflictChunk {
 
 export type ConflictChunk = ContextConflictChunk | ChoiceConflictChunk
 
+export type ConflictChoice = 'ours' | 'theirs' | 'both'
+
 export function parseConflictMarkers(content: string): ConflictChunk[] {
   const lines = splitPreserveNewline(content)
   const chunks: ConflictChunk[] = []
@@ -95,6 +97,30 @@ export function parseConflictMarkers(content: string): ConflictChunk[] {
     chunks.push({ type: 'context', content: context })
 
   return chunks
+}
+
+export function resolveConflictChunks(chunks: ConflictChunk[], choices: Record<number, ConflictChoice>): string {
+  return chunks.map((chunk) => {
+    if (chunk.type === 'context')
+      return chunk.content
+
+    const choice = choices[chunk.id]
+    if (choice === 'ours')
+      return chunk.ours
+    if (choice === 'theirs')
+      return chunk.theirs
+    if (choice === 'both')
+      return `${chunk.ours}${chunk.theirs}`
+
+    return [
+      `<<<<<<< ${chunk.oursLabel}\n`,
+      chunk.ours,
+      chunk.base !== undefined && chunk.baseLabel ? `||||||| ${chunk.baseLabel}\n${chunk.base}` : '',
+      '=======\n',
+      chunk.theirs,
+      `>>>>>>> ${chunk.theirsLabel}\n`,
+    ].join('')
+  }).join('')
 }
 
 function splitPreserveNewline(content: string): string[] {

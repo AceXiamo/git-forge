@@ -36,12 +36,15 @@ Press `Cmd+J` on macOS to open the detailed Git Forge panel.
 
 <!-- commands -->
 
-| Command                    | Title                              |
-| -------------------------- | ---------------------------------- |
-| `git-forge.openDetails`    | Git Forge: Open Details Panel      |
-| `git-forge.refreshHistory` | Git Forge: Refresh History         |
-| `git-forge.copyCommitHash` | Git Forge: Copy Commit Hash        |
-| `git-forge.showCommit`     | Git Forge: Show Commit in Terminal |
+| Command                    | Title                                  |
+| -------------------------- | -------------------------------------- |
+| `git-forge.openDetails`    | Git Forge: Open Details Panel          |
+| `git-forge.refreshHistory` | Git Forge: Refresh History             |
+| `git-forge.copyCommitHash` | Git Forge: Copy Commit Hash            |
+| `git-forge.showCommit`     | Git Forge: Show Commit in Terminal     |
+| `git-forge.sync`           | Git Forge: Sync with Upstream          |
+| `git-forge.openConflicts`  | Git Forge: Open Conflict Resolver      |
+| `git-forge.abortMerge`     | Git Forge: Abort Current Git Operation |
 
 <!-- commands -->
 

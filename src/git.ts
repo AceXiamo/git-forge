@@ -1,4 +1,5 @@
 import type { ConflictChunk } from './conflicts'
+import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -121,12 +122,16 @@ export interface GitOperation {
 
 export interface ConflictDetail {
   filePath: string
+  status: string
   base: string
   ours: string
   theirs: string
   current: string
   chunks: ConflictChunk[]
   operation: GitOperation
+  binary: boolean
+  canResolveInline: boolean
+  resolved: boolean
 }
 
 export class GitService {
@@ -168,30 +173,61 @@ export class GitService {
     }
   }
 
+  async status(): Promise<Pick<GitSnapshot, 'branch' | 'changes' | 'conflicts' | 'counts'>> {
+    return parseStatus(await this.run(['status', '--porcelain=v1', '-b']))
+  }
+
+  async currentOperation(): Promise<GitOperation> {
+    return this.operation()
+  }
+
   async conflictDetail(filePath: string): Promise<ConflictDetail> {
     const absolutePath = this.resolvePath(filePath)
-    const [base, ours, theirs, current, operation] = await Promise.all([
+    const [status, base, ours, theirs, currentBuffer, operation] = await Promise.all([
+      this.status(),
       this.showStage(filePath, 1),
       this.showStage(filePath, 2),
       this.showStage(filePath, 3),
-      fs.readFile(absolutePath, 'utf8').catch(() => ''),
+      fs.readFile(absolutePath).catch(() => Buffer.alloc(0)),
       this.operation(),
     ])
+    const change = status.changes.find(change => change.path === filePath)
+    const binary = isBinaryBuffer(currentBuffer)
+    const current = binary ? '' : currentBuffer.toString('utf8')
+    const chunks = binary ? [] : parseConflictMarkers(current)
+    const resolved = !change?.conflicted
 
     return {
       filePath,
+      status: change?.summary ?? 'Resolved',
       base,
       ours,
       theirs,
       current,
-      chunks: parseConflictMarkers(current),
+      chunks,
       operation,
+      binary,
+      canResolveInline: !binary && chunks.some(chunk => chunk.type === 'conflict'),
+      resolved,
     }
   }
 
   async saveResolution(filePath: string, content: string): Promise<void> {
     const absolutePath = this.resolvePath(filePath)
     await fs.writeFile(absolutePath, content, 'utf8')
+    await this.run(['add', '--', filePath])
+  }
+
+  async acceptConflictSide(filePath: string, side: 'ours' | 'theirs'): Promise<void> {
+    this.resolvePath(filePath)
+    const stage = side === 'ours' ? 2 : 3
+    const content = await this.showStage(filePath, stage)
+    if (content) {
+      await this.saveResolution(filePath, content)
+      return
+    }
+
+    await this.run(['checkout', side === 'ours' ? '--ours' : '--theirs', '--', filePath])
     await this.run(['add', '--', filePath])
   }
 
@@ -210,8 +246,39 @@ export class GitService {
     await this.run(['pull', '--ff-only'])
   }
 
+  async syncMerge(): Promise<void> {
+    await this.fetch()
+    const status = await this.status()
+    if (!status.branch.upstream)
+      throw new Error(`Current branch ${status.branch.current} has no upstream branch.`)
+
+    await this.run(['merge', '--no-edit', status.branch.upstream])
+  }
+
   async push(): Promise<void> {
     await this.run(['push'])
+  }
+
+  async abortOperation(): Promise<void> {
+    const operation = await this.operation()
+    if (operation.kind === 'merge') {
+      await this.run(['merge', '--abort'])
+      return
+    }
+    if (operation.kind === 'rebase') {
+      await this.run(['rebase', '--abort'])
+      return
+    }
+    if (operation.kind === 'cherry-pick') {
+      await this.run(['cherry-pick', '--abort'])
+      return
+    }
+    if (operation.kind === 'revert') {
+      await this.run(['revert', '--abort'])
+      return
+    }
+
+    throw new Error('No merge, rebase, cherry-pick, or revert operation is in progress.')
   }
 
   async stage(filePath: string): Promise<void> {
@@ -442,6 +509,10 @@ function parseStatus(raw: string): Pick<GitSnapshot, 'branch' | 'changes' | 'con
   }
 }
 
+export const __testing = {
+  parseStatus,
+}
+
 function parseBranchLine(line: string): BranchStatus {
   const value = line.replace(/^## /, '')
   const ahead = Number.parseInt(value.match(/ahead (\d+)/)?.[1] ?? '0', 10)
@@ -599,6 +670,13 @@ function parseStatNumber(value: string): number {
     return 0
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function isBinaryBuffer(buffer: Buffer): boolean {
+  if (!buffer.length)
+    return false
+
+  return buffer.includes(0)
 }
 
 function runGit(args: string[], cwd: string): Promise<string> {

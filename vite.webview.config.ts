@@ -10,9 +10,12 @@ export default defineConfig({
     emptyOutDir: true,
     cssCodeSplit: false,
     rollupOptions: {
-      input: 'src/webview/details/main.tsx',
+      input: {
+        conflicts: 'src/webview/conflicts/main.tsx',
+        details: 'src/webview/details/main.tsx',
+      },
       output: {
-        entryFileNames: 'details.js',
+        entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name].js',
         assetFileNames: (assetInfo) => {
           if (assetInfo.names.some(name => name.endsWith('.css')))

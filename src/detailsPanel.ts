@@ -199,7 +199,7 @@ export class GitDetailsPanel implements WebviewViewProvider {
       `default-src 'none'`,
       `img-src ${webview.cspSource} https://www.gravatar.com data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src 'nonce-${nonce}'`,
+      `script-src ${webview.cspSource} 'nonce-${nonce}'`,
     ].join('; ')
 
     return /* html */ `<!doctype html>
