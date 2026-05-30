@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+:root {
+  --graph-row-height: 34px;
+  --graph-col-width: 184px;
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-editor-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --border: var(--vscode-panel-border);
+  --panel: var(--vscode-sideBar-background);
+  --panel-strong: var(--vscode-editorWidget-background);
+  --input: var(--vscode-input-background);
+  --hover: var(--vscode-list-hoverBackground);
+  --selected: var(--vscode-list-activeSelectionBackground);
+  --accent: var(--vscode-button-background);
+  --accent-fg: var(--vscode-button-foreground);
+  --success: #4fa078;
+  --blue: #4aa7d9;
+  --violet: #9b7bd8;
+  --orange: #d99b45;
+  --danger: var(--vscode-errorForeground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.log-backdrop {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  right: 0;
+  height: 24px;
+  border-radius: 999px 0 0 999px;
+  border-right: 2px solid var(--blue);
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  transform: translateY(-50%);
+}
+
+.log-backdrop.lane-1 {
+  border-right-color: var(--violet);
+  background: color-mix(in srgb, var(--violet) 16%, transparent);
+}
+
+.log-backdrop.lane-2 {
+  border-right-color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+}
+
+.log-backdrop.working {
+  height: 26px;
+  border-right-width: 3px;
+  background: color-mix(in srgb, var(--blue) 22%, transparent);
+}
+
+.graph-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--border) 66%, transparent);
+  stroke-width: 2;
+  stroke-linecap: butt;
+  stroke-linejoin: round;
+}
+
+.graph-line.curve {
+  stroke-linecap: round;
+}
+
+.graph-line.branch-link {
+  stroke-width: 1;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+.graph-line.lane-0 {
+  stroke: var(--blue);
+}
+
+.graph-line.lane-1 {
+  stroke: var(--violet);
+}
+
+.graph-line.lane-2 {
+  stroke: var(--orange);
+}
+
+.graph-node-badge {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: 2px;
+  border: 2px solid var(--blue);
+  border-radius: 50%;
+  background: var(--panel);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  overflow: hidden;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.graph-node-badge.lane-1 {
+  border-color: var(--violet);
+  background: color-mix(in srgb, var(--violet) 76%, #17141f);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--violet) 18%, transparent);
+}
+
+.graph-node-badge.lane-2 {
+  border-color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 76%, #17141f);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange) 18%, transparent);
+}
