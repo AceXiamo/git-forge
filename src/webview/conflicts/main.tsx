@@ -217,7 +217,7 @@ function ConflictResolver({ snapshot }: { snapshot: ReadySnapshot }) {
         </div>
       </aside>
 
-      <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+      <section className="grid min-h-0 grid-rows-[minmax(0,1fr)]">
         <ConflictDetailView detail={snapshot.detail} operation={snapshot.operation} />
       </section>
     </main>
@@ -512,7 +512,10 @@ function MergeEditor({
 
       <div
         className="grid min-h-0 overflow-hidden"
-        style={{ gridTemplateColumns: `minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr)` }}
+        style={{
+          gridTemplateColumns: `minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr)`,
+          gridTemplateRows: 'minmax(0, 1fr)',
+        }}
       >
         <MergePane side="ours" layout={layout} activeId={activeId} scrollRef={paneRefs.ours} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
         <MergeDivider
@@ -569,29 +572,68 @@ function MergePane({
   onFocusConflict: (id: number) => void
 }) {
   return (
-    <div
-      ref={scrollRef}
-      className="merge-scroll merge-pane min-h-0 overflow-auto border-r border-[var(--border)]"
-      onScroll={event => onScroll(event.currentTarget)}
-    >
-      {layout.groups.map(group => (
-        group.kind === 'context'
-          ? <ContextGroup key={group.key} rows={group[side]} />
-          : (
-              <div
-                key={group.key}
-                className={cn(
-                  'merge-region',
-                  group.conflictId === activeId && 'merge-region--active',
-                  !group.unresolved && 'merge-region--resolved',
-                )}
-                data-cid={group.conflictId}
-                onMouseDown={() => onFocusConflict(group.conflictId!)}
-              >
-                {group[side].map((row, index) => <RowView key={index} row={row} />)}
-              </div>
-            )
-      ))}
+    <div className="merge-pane-wrap border-r border-[var(--border)]">
+      <div
+        ref={scrollRef}
+        className="merge-scroll merge-pane"
+        onScroll={event => onScroll(event.currentTarget)}
+      >
+        {layout.groups.map(group => (
+          group.kind === 'context'
+            ? <ContextGroup key={group.key} rows={group[side]} />
+            : (
+                <div
+                  key={group.key}
+                  className={cn(
+                    'merge-region',
+                    group.conflictId === activeId && 'merge-region--active',
+                    isSideSettled(group, side) && 'merge-region--resolved',
+                  )}
+                  data-cid={group.conflictId}
+                  onMouseDown={() => onFocusConflict(group.conflictId!)}
+                >
+                  {group[side].map((row, index) => <RowView key={index} row={row} />)}
+                </div>
+              )
+        ))}
+      </div>
+      <OverviewRuler layout={layout} activeId={activeId} onJump={onFocusConflict} />
+    </div>
+  )
+}
+
+function OverviewRuler({
+  layout,
+  activeId,
+  onJump,
+}: {
+  layout: MergeLayout
+  activeId?: number
+  onJump: (id: number) => void
+}) {
+  // The scroll content has a 45vh bottom padding, so include it in the total
+  // height to keep ruler ticks aligned with the actual conflict positions.
+  const total = (layout.totalHeight || 1) + window.innerHeight * 0.45
+  return (
+    <div className="overview-ruler" aria-hidden="true">
+      {layout.regions.map((region) => {
+        const top = (region.top / total) * 100
+        const height = ((region.bottom - region.top) / total) * 100
+        return (
+          <button
+            key={region.id}
+            type="button"
+            className={cn(
+              'overview-tick',
+              region.resolved && 'overview-tick--resolved',
+              region.id === activeId && 'overview-tick--active',
+            )}
+            style={{ top: `${top}%`, height: `${height}%` }}
+            title={region.resolved ? 'Resolved conflict' : 'Unresolved conflict'}
+            onClick={() => onJump(region.id)}
+          />
+        )
+      })}
     </div>
   )
 }
@@ -710,6 +752,14 @@ function isSideActive(resolution: Resolution | undefined, side: Side): boolean {
   return Array.isArray(resolution) && resolution.includes(side)
 }
 
+function isSideSettled(group: MergeGroup, side: MergeSide): boolean {
+  if (side === 'ours')
+    return group.oursSettled
+  if (side === 'theirs')
+    return group.theirsSettled
+  return group.centerSettled
+}
+
 function ribbonPoints(kind: 'left' | 'right', region: MergeRegion): string {
   const { top } = region
   const w = DIVIDER_W
@@ -747,6 +797,11 @@ interface MergeGroup {
   centerCount: number
   theirsCount: number
   unresolved: boolean
+  // Per-pane "handled" flags: a pane's highlight is cleared once that side has
+  // actually been interacted with (accepted, or the whole block ignored).
+  oursSettled: boolean
+  centerSettled: boolean
+  theirsSettled: boolean
   ours: MergeRow[]
   center: MergeRow[]
   theirs: MergeRow[]
@@ -755,9 +810,11 @@ interface MergeGroup {
 interface MergeRegion {
   id: number
   top: number
+  bottom: number
   oursBottom: number
   centerBottom: number
   theirsBottom: number
+  resolved: boolean
 }
 
 interface MergeLayout {
@@ -789,9 +846,11 @@ function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolu
     regions.push({
       id: chunk.id,
       top,
+      bottom: top + group.rowCount * LINE_HEIGHT,
       oursBottom: top + group.oursCount * LINE_HEIGHT,
       centerBottom: top + centerRows * LINE_HEIGHT,
       theirsBottom: top + group.theirsCount * LINE_HEIGHT,
+      resolved: !group.unresolved,
     })
     row += group.rowCount
   })
@@ -815,7 +874,7 @@ function buildContextGroup(
     theirs.push({ text, lineNo: ++counters.theirs, tone: 'ctx', filler: false })
   }
 
-  return { key: `ctx-${index}`, kind: 'context', rowCount: lines.length, oursCount: lines.length, centerCount: lines.length, theirsCount: lines.length, unresolved: false, ours, center, theirs }
+  return { key: `ctx-${index}`, kind: 'context', rowCount: lines.length, oursCount: lines.length, centerCount: lines.length, theirsCount: lines.length, unresolved: false, oursSettled: false, centerSettled: false, theirsSettled: false, ours, center, theirs }
 }
 
 function buildConflictGroup(
@@ -828,6 +887,7 @@ function buildConflictGroup(
   const centerSegs = resolvedSegments(oursLines, theirsLines, resolution)
   const fillerTone: MergeTone = resolution === undefined ? 'unresolved' : resolution === 'none' ? 'removed' : 'result'
   const height = Math.max(oursLines.length, theirsLines.length, centerSegs.length, 1)
+  const ignored = resolution === 'none'
 
   return {
     key: `cf-${chunk.id}`,
@@ -839,6 +899,9 @@ function buildConflictGroup(
     centerCount: centerSegs.length,
     theirsCount: theirsLines.length,
     unresolved: resolution === undefined,
+    oursSettled: ignored || isSideActive(resolution, 'ours'),
+    theirsSettled: ignored || isSideActive(resolution, 'theirs'),
+    centerSettled: resolution !== undefined,
     ours: padRows(oursLines, height, 'ours', counters, 'ours'),
     center: buildCenterRows(centerSegs, height, fillerTone, counters),
     theirs: padRows(theirsLines, height, 'theirs', counters, 'theirs'),

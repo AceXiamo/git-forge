@@ -1,45 +1,77 @@
-name: Publish Extension
+name: Release
 
 on:
   push:
     tags:
       - v*
 
-jobs:
-  publish-extension:
-    permissions:
-      id-token: write
-      contents: write
-      actions: write
+permissions:
+  contents: write
 
+jobs:
+  publish:
+    name: Publish extension
     runs-on: ubuntu-latest
+    env:
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Set node
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: pnpm
 
-      - run: npx changelogithub
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release tag
+        id: meta
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          if [ "$VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $VERSION" >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix=git-forge-$VERSION.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm exec vitest run
+
+      - name: Package VSIX
+        run: pnpm ext:package
+
+      - name: Publish to VS Code Marketplace
+        run: pnpm exec vsce publish --packagePath "${{ steps.meta.outputs.vsix }}" --skip-duplicate
         env:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
-      - run: pnpm install
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: pnpm exec ovsx --pat "$OVSX_PAT" publish "${{ steps.meta.outputs.vsix }}" --skip-duplicate
 
-      - name: Generate .vsix file
-        run: pnpm package
-
-      - name: Publish Extension
-        run: npx vsxpub --no-dependencies
+      - name: Create GitHub release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${{ steps.meta.outputs.vsix }}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${{ steps.meta.outputs.vsix }}" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VSCE_PAT: ${{secrets.VSCE_PAT}}
-          OVSX_PAT: ${{secrets.OVSX_PAT}}
+          GH_TOKEN: ${{ github.token }}

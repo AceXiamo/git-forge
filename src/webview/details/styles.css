@@ -125,12 +125,55 @@ textarea {
 }
 
 /* IDEA-style aligned three-pane merge view */
+.merge-pane-wrap {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .merge-pane {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
   font-family: var(--vscode-editor-font-family);
   font-size: 12px;
   line-height: 20px;
   /* Breathing room so the last conflict can be scrolled up from the very bottom */
   padding-bottom: 45vh;
+}
+
+/* Overview ruler: colour ticks next to the scrollbar marking conflict locations */
+.overview-ruler {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 14px;
+  width: 6px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.overview-tick {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  min-height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+  background: var(--danger);
+  opacity: 0.85;
+}
+
+.overview-tick:hover,
+.overview-tick--active {
+  opacity: 1;
+}
+
+.overview-tick--resolved {
+  opacity: 0.25;
 }
 
 .merge-pill {
