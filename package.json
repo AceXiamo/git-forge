@@ -2,7 +2,7 @@
   "publisher": "acexiamo",
   "name": "git-forge",
   "displayName": "Git Forge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "packageManager": "pnpm@10.27.0",
   "description": "A compact Git history, branch status, and conflict resolver for VS Code Source Control.",
@@ -44,6 +44,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:git-forge.openDetails",
+    "onCommand:git-forge.switchRepository",
     "onView:gitForge.history",
     "onView:gitForge.details"
   ],
@@ -60,6 +61,12 @@
         "title": "Refresh History",
         "category": "Git Forge",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "git-forge.switchRepository",
+        "title": "Switch Repository",
+        "category": "Git Forge",
+        "icon": "$(repo)"
       },
       {
         "command": "git-forge.copyCommitHash",
@@ -152,6 +159,11 @@
         },
         {
           "command": "git-forge.refreshHistory",
+          "when": "view == gitForge.history",
+          "group": "navigation"
+        },
+        {
+          "command": "git-forge.switchRepository",
           "when": "view == gitForge.history",
           "group": "navigation"
         }

@@ -8,6 +8,8 @@ import type {
   WebviewViewResolveContext,
 } from 'vscode'
 import type { GitCommit, GitSnapshot } from './git'
+import type { RepositoryInfo } from './repositoryModel'
+import type { RepositoryRegistry } from './repositoryRegistry'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {
@@ -24,6 +26,7 @@ interface DetailsMessage {
   hash?: string
   parentHash?: string
   path?: string
+  root?: string
   text?: string
 }
 
@@ -33,13 +36,22 @@ interface DetailsCommit extends GitCommit {
 
 interface DetailsSnapshot extends Omit<GitSnapshot, 'commits'> {
   commits: DetailsCommit[]
+  repositories: RepositoryInfo[]
+  selectedRepositoryRoot: string
+}
+
+interface EmptyDetailsSnapshot {
+  state: 'empty'
+  reason: string
+  repositories: RepositoryInfo[]
+  selectedRepositoryRoot?: string
 }
 
 export class GitDetailsPanel implements WebviewViewProvider {
   private view: WebviewView | undefined
   private maxCommits = 0
 
-  constructor(private readonly context: ExtensionContext) {}
+  constructor(private readonly context: ExtensionContext, private readonly repositories: RepositoryRegistry) {}
 
   register(): void {
     this.context.subscriptions.push(
@@ -49,6 +61,9 @@ export class GitDetailsPanel implements WebviewViewProvider {
         },
       }),
       commands.registerCommand('git-forge.openDetails', () => this.open()),
+      this.repositories.onDidChangeRepositories(() => {
+        void this.postSnapshot()
+      }),
     )
   }
 
@@ -87,6 +102,8 @@ export class GitDetailsPanel implements WebviewViewProvider {
       await this.loadMore()
     if (message.type === 'openCommitFile')
       await this.openCommitFile(message)
+    if (message.type === 'selectRepository')
+      await this.selectRepository(message)
     if (message.type === 'copyText')
       await this.copyText(message)
   }
@@ -109,11 +126,7 @@ export class GitDetailsPanel implements WebviewViewProvider {
     if (!message.hash || !message.path)
       return
 
-    const workspacePath = this.currentWorkspacePath()
-    if (!workspacePath)
-      return
-
-    const service = await GitService.fromWorkspace(workspacePath)
+    const service = await this.repositories.currentService()
     if (!service)
       return
 
@@ -130,6 +143,18 @@ export class GitDetailsPanel implements WebviewViewProvider {
     await commands.executeCommand('vscode.diff', left, right, title)
   }
 
+  private async selectRepository(message: DetailsMessage): Promise<void> {
+    if (!message.root)
+      return
+
+    const selected = await this.repositories.selectRepository(message.root)
+    if (!selected)
+      return
+
+    this.maxCommits = 0
+    await this.postSnapshot()
+  }
+
   private async postSnapshot(): Promise<void> {
     if (!this.view)
       return
@@ -138,24 +163,22 @@ export class GitDetailsPanel implements WebviewViewProvider {
     await this.view.webview.postMessage({ type: 'snapshot', snapshot })
   }
 
-  private async snapshot(): Promise<DetailsSnapshot | { state: 'empty', reason: string }> {
-    const workspacePath = this.currentWorkspacePath()
-    if (!workspacePath) {
+  private async snapshot(): Promise<DetailsSnapshot | EmptyDetailsSnapshot> {
+    const selection = await this.repositories.selection()
+    if (!selection.selected) {
       return {
         state: 'empty',
-        reason: 'Open a VS Code folder before using Git Forge.',
+        reason: 'Open a folder containing a Git repository before using Git Forge.',
+        repositories: selection.repositories,
       }
     }
 
-    const service = await GitService.fromWorkspace(workspacePath)
-    if (!service) {
-      return {
-        state: 'empty',
-        reason: 'The current workspace is not inside a Git repository.',
-      }
-    }
-
-    return decorateSnapshot(await service.snapshot(this.currentMaxCommits()))
+    const service = GitService.fromRoot(selection.selected.root)
+    return decorateSnapshot(
+      await service.snapshot(this.currentMaxCommits()),
+      selection.repositories,
+      selection.selected.root,
+    )
   }
 
   private currentMaxCommits(): number {
@@ -166,17 +189,6 @@ export class GitDetailsPanel implements WebviewViewProvider {
 
   private configuredMaxCommits(): number {
     return workspace.getConfiguration('gitForge').get<number>('maxCommits', 80)
-  }
-
-  private currentWorkspacePath(): string | undefined {
-    const activeUri = window.activeTextEditor?.document.uri
-    if (activeUri?.scheme === 'file') {
-      const folder = workspace.getWorkspaceFolder(activeUri)
-      if (folder)
-        return folder.uri.fsPath
-    }
-
-    return workspace.workspaceFolders?.[0]?.uri.fsPath
   }
 
   private html(webview: Webview): string {
@@ -231,9 +243,11 @@ function shortRef(ref: string): string {
   return ref.length > 7 ? ref.slice(0, 7) : ref
 }
 
-function decorateSnapshot(snapshot: GitSnapshot): DetailsSnapshot {
+function decorateSnapshot(snapshot: GitSnapshot, repositories: RepositoryInfo[], selectedRepositoryRoot: string): DetailsSnapshot {
   return {
     ...snapshot,
+    repositories,
+    selectedRepositoryRoot,
     commits: snapshot.commits.map(commit => ({
       ...commit,
       avatarUrl: gravatarUrl(commit.authorEmail),

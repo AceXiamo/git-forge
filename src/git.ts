@@ -137,10 +137,14 @@ export interface ConflictDetail {
 export class GitService {
   private constructor(readonly root: string) {}
 
+  static fromRoot(root: string): GitService {
+    return new GitService(path.resolve(root))
+  }
+
   static async fromWorkspace(workspacePath: string): Promise<GitService | undefined> {
     try {
       const root = (await runGit(['rev-parse', '--show-toplevel'], workspacePath)).trim()
-      return new GitService(root)
+      return GitService.fromRoot(root)
     }
     catch {
       return undefined

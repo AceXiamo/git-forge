@@ -1,6 +1,18 @@
+import { execFile } from 'node:child_process'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { parseConflictMarkers, resolveConflictChunks } from '../src/conflicts'
 import { __testing as gitTesting } from '../src/git'
+import {
+  buildRepositoryList,
+  discoverFilesystemRepositoryCandidates,
+  selectRepositoryRoot,
+} from '../src/repositoryModel'
+
+const execFileAsync = promisify(execFile)
 
 describe('conflict parser', () => {
   it('splits conflict markers into context and choices', () => {
@@ -117,5 +129,81 @@ describe('git status parser', () => {
       'UU',
     ])
     expect(status.counts.conflicted).toBe(7)
+  })
+})
+
+describe('repository discovery and selection', () => {
+  it('dedupes VS Code repositories and filters them to workspace folders', () => {
+    const workspaceRoot = path.join(os.tmpdir(), 'git-forge-workspace')
+    const frontendRoot = path.join(workspaceRoot, 'frontend')
+    const backendRoot = path.join(workspaceRoot, 'backend')
+    const outsideRoot = path.join(os.tmpdir(), 'outside-repo')
+
+    const repositories = buildRepositoryList([
+      { root: frontendRoot, source: 'vscode' },
+      { root: frontendRoot, source: 'filesystem' },
+      { root: outsideRoot, source: 'vscode' },
+      { root: backendRoot, source: 'vscode' },
+    ], [{ path: workspaceRoot }])
+
+    expect(repositories.map(repository => repository.root)).toEqual([backendRoot, frontendRoot])
+    expect(repositories.map(repository => repository.source)).toEqual(['vscode', 'vscode'])
+  })
+
+  it('finds direct child repositories when the workspace root is not a repository', async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'git-forge-'))
+
+    try {
+      const frontendRoot = path.join(workspaceRoot, 'frontend')
+      const backendRoot = path.join(workspaceRoot, 'backend')
+      const docsRoot = path.join(workspaceRoot, 'docs')
+      await Promise.all([
+        fs.mkdir(frontendRoot),
+        fs.mkdir(backendRoot),
+        fs.mkdir(docsRoot),
+      ])
+      await Promise.all([
+        execFileAsync('git', ['init'], { cwd: frontendRoot }),
+        execFileAsync('git', ['init'], { cwd: backendRoot }),
+      ])
+
+      const candidates = await discoverFilesystemRepositoryCandidates([workspaceRoot])
+      const repositories = buildRepositoryList(candidates, [{ path: workspaceRoot }])
+
+      expect(repositories.map(repository => repository.root)).toEqual([backendRoot, frontendRoot])
+    }
+    finally {
+      await fs.rm(workspaceRoot, { force: true, recursive: true })
+    }
+  })
+
+  it('keeps a persisted repository selection ahead of the active file', () => {
+    const workspaceRoot = path.join(os.tmpdir(), 'git-forge-workspace')
+    const frontendRoot = path.join(workspaceRoot, 'frontend')
+    const backendRoot = path.join(workspaceRoot, 'backend')
+    const repositories = buildRepositoryList([
+      { root: frontendRoot, source: 'vscode' },
+      { root: backendRoot, source: 'vscode' },
+    ], [{ path: workspaceRoot }])
+
+    expect(selectRepositoryRoot(repositories, {
+      activeFile: path.join(backendRoot, 'src', 'main.ts'),
+      persistedRoot: frontendRoot,
+    })).toBe(frontendRoot)
+  })
+
+  it('falls back to the active file repository only when there is no persisted selection', () => {
+    const workspaceRoot = path.join(os.tmpdir(), 'git-forge-workspace')
+    const frontendRoot = path.join(workspaceRoot, 'frontend')
+    const backendRoot = path.join(workspaceRoot, 'backend')
+    const repositories = buildRepositoryList([
+      { root: frontendRoot, source: 'vscode' },
+      { root: backendRoot, source: 'vscode' },
+    ], [{ path: workspaceRoot }])
+
+    expect(selectRepositoryRoot(repositories, {
+      activeFile: path.join(frontendRoot, 'src', 'App.tsx'),
+      persistedRoot: path.join(workspaceRoot, 'missing'),
+    })).toBe(frontendRoot)
   })
 })

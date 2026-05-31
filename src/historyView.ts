@@ -1,5 +1,7 @@
 import type { Event, ExtensionContext, TreeDataProvider } from 'vscode'
 import type { BranchStatus, GitCommit, GitCommitFile, GitSnapshot } from './git'
+import type { RepositoryInfo } from './repositoryModel'
+import type { RepositoryRegistry } from './repositoryRegistry'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {
@@ -14,8 +16,9 @@ import {
   workspace,
 } from 'vscode'
 import { GitService } from './git'
+import { sameRepositoryRoot } from './repositoryModel'
 
-type HistoryNode = CommitNode | CompareNode | EmptyNode | FileNode | StatusNode
+type HistoryNode = CommitNode | CompareNode | EmptyNode | FileNode | RepositoryNode | StatusNode
 
 export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
   private readonly onDidChangeTreeDataEmitter = new EventEmitter<HistoryNode | undefined | void>()
@@ -23,7 +26,7 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
 
   private refreshTimer: NodeJS.Timeout | undefined
 
-  constructor(private readonly context: ExtensionContext) {}
+  constructor(private readonly context: ExtensionContext, private readonly repositories: RepositoryRegistry) {}
 
   register(): void {
     const tree = window.createTreeView('gitForge.history', {
@@ -41,6 +44,7 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
       workspace.onDidSaveTextDocument(() => this.refreshSoon()),
       workspace.onDidChangeWorkspaceFolders(() => this.refresh()),
       window.onDidChangeActiveTextEditor(() => this.refreshSoon()),
+      this.repositories.onDidChangeRepositories(() => this.refresh()),
     )
   }
 
@@ -57,11 +61,11 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
   }
 
   async getChildren(element?: HistoryNode): Promise<HistoryNode[]> {
-    const service = await this.currentService()
-    if (!service)
-      return element ? [] : [new EmptyNode('Open a folder inside a Git repository.')]
+    if (element instanceof RepositoryNode)
+      return []
 
     if (element instanceof CommitNode) {
+      const service = GitService.fromRoot(element.repositoryRoot)
       const files = await service.commitFiles(element.commit.hash)
       return files.map(file => new FileNode(file, service.root))
     }
@@ -69,23 +73,31 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
     if (element)
       return []
 
+    const selection = await this.repositories.selection()
+    if (!selection.selected)
+      return [new EmptyNode('Open a folder containing a Git repository.')]
+
+    const service = GitService.fromRoot(selection.selected.root)
     const maxCommits = workspace.getConfiguration('gitForge').get<number>('maxCommits', 80)
     const snapshot = await service.snapshot(maxCommits)
-    return this.rootNodes(snapshot)
+    return this.rootNodes(snapshot, selection.repositories)
   }
 
-  private rootNodes(snapshot: GitSnapshot): HistoryNode[] {
-    const nodes: HistoryNode[] = [new StatusNode(snapshot.branch, snapshot.repoName)]
+  private rootNodes(snapshot: GitSnapshot, repositories: RepositoryInfo[]): HistoryNode[] {
+    const nodes: HistoryNode[] = [
+      new RepositoryNode(repositories.find(repository => sameRepositoryRoot(repository.root, snapshot.root)), repositories.length),
+      new StatusNode(snapshot.branch, snapshot.repoName),
+    ]
 
     if (snapshot.branch.upstream)
-      nodes.push(new CompareNode(snapshot.branch))
+      nodes.push(new CompareNode(snapshot.branch, snapshot.root))
 
     if (!snapshot.commits.length) {
       nodes.push(new EmptyNode('No commits yet.'))
       return nodes
     }
 
-    nodes.push(...snapshot.commits.map(commit => new CommitNode(commit)))
+    nodes.push(...snapshot.commits.map(commit => new CommitNode(commit, snapshot.root)))
     return nodes
   }
 
@@ -101,11 +113,7 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
     if (!(node instanceof CommitNode))
       return
 
-    const service = await this.currentService()
-    if (!service)
-      return
-
-    const terminal = window.createTerminal({ name: 'Git Forge', cwd: service.root })
+    const terminal = window.createTerminal({ name: 'Git Forge', cwd: node.repositoryRoot })
     terminal.show()
     terminal.sendText(`git show --stat --decorate --oneline ${node.commit.hash}`)
   }
@@ -114,11 +122,10 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
     if (!(node instanceof CompareNode))
       return
 
-    const service = await this.currentService()
-    if (!service || !node.branch.upstream)
+    if (!node.branch.upstream)
       return
 
-    const terminal = window.createTerminal({ name: 'Git Forge', cwd: service.root })
+    const terminal = window.createTerminal({ name: 'Git Forge', cwd: node.repositoryRoot })
     terminal.show()
     terminal.sendText(`git log --left-right --graph --cherry-pick --oneline ${node.branch.upstream}...${node.branch.current}`)
   }
@@ -129,23 +136,18 @@ export class GitHistoryProvider implements TreeDataProvider<HistoryNode> {
 
     this.refreshTimer = setTimeout(() => this.refresh(), 600)
   }
+}
 
-  private async currentService(): Promise<GitService | undefined> {
-    const workspacePath = this.currentWorkspacePath()
-    if (!workspacePath)
-      return undefined
-    return GitService.fromWorkspace(workspacePath)
-  }
-
-  private currentWorkspacePath(): string | undefined {
-    const activeUri = window.activeTextEditor?.document.uri
-    if (activeUri?.scheme === 'file') {
-      const folder = workspace.getWorkspaceFolder(activeUri)
-      if (folder)
-        return folder.uri.fsPath
+class RepositoryNode extends TreeItem {
+  constructor(repository: RepositoryInfo | undefined, repositoryCount: number) {
+    super(repository?.label ?? 'No repository selected', TreeItemCollapsibleState.None)
+    this.description = repositoryCount > 1 ? `${repositoryCount} repositories` : 'Repository'
+    this.iconPath = new ThemeIcon('repo')
+    this.tooltip = repository?.root
+    this.command = {
+      command: 'git-forge.switchRepository',
+      title: 'Switch Repository',
     }
-
-    return workspace.workspaceFolders?.[0]?.uri.fsPath
   }
 }
 
@@ -162,10 +164,12 @@ class StatusNode extends TreeItem {
 
 class CompareNode extends TreeItem {
   readonly branch: BranchStatus
+  readonly repositoryRoot: string
 
-  constructor(branch: BranchStatus) {
+  constructor(branch: BranchStatus, repositoryRoot: string) {
     super(`Compare ${branch.current} with ${branch.upstream}`, TreeItemCollapsibleState.None)
     this.branch = branch
+    this.repositoryRoot = repositoryRoot
     this.iconPath = new ThemeIcon('git-compare')
     this.description = `${branch.ahead} ahead, ${branch.behind} behind`
     this.command = {
@@ -178,10 +182,12 @@ class CompareNode extends TreeItem {
 
 class CommitNode extends TreeItem {
   readonly commit: GitCommit
+  readonly repositoryRoot: string
 
-  constructor(commit: GitCommit) {
+  constructor(commit: GitCommit, repositoryRoot: string) {
     super(commitLabel(commit), TreeItemCollapsibleState.Collapsed)
     this.commit = commit
+    this.repositoryRoot = repositoryRoot
     this.id = commit.hash
     this.contextValue = 'gitForgeCommit'
     this.description = `${commit.author}, ${commit.relativeDate}`

@@ -4,7 +4,9 @@ import type {
   Webview,
   WebviewPanel,
 } from 'vscode'
-import type { ConflictDetail, GitChange, GitOperation } from './git'
+import type { ConflictDetail, GitChange, GitOperation, GitService } from './git'
+import type { RepositoryInfo } from './repositoryModel'
+import type { RepositoryRegistry } from './repositoryRegistry'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {
@@ -14,11 +16,11 @@ import {
   window,
   workspace,
 } from 'vscode'
-import { GitService } from './git'
 
 interface ConflictMessage {
   type: string
   path?: string
+  root?: string
   content?: string
   side?: 'ours' | 'theirs'
 }
@@ -31,6 +33,8 @@ interface ConflictSnapshot {
   state: 'ready'
   root: string
   repoName: string
+  repositories: RepositoryInfo[]
+  selectedRepositoryRoot: string
   operation: GitOperation
   conflicts: ConflictFile[]
   selectedPath?: string
@@ -40,6 +44,8 @@ interface ConflictSnapshot {
 interface EmptyConflictSnapshot {
   state: 'empty'
   reason: string
+  repositories: RepositoryInfo[]
+  selectedRepositoryRoot?: string
 }
 
 export class GitConflictController {
@@ -48,7 +54,7 @@ export class GitConflictController {
   private lastConflictKey = ''
   private pollTimer: NodeJS.Timeout | undefined
 
-  constructor(private readonly context: ExtensionContext) {}
+  constructor(private readonly context: ExtensionContext, private readonly repositories: RepositoryRegistry) {}
 
   register(): void {
     this.context.subscriptions.push(
@@ -57,6 +63,11 @@ export class GitConflictController {
       commands.registerCommand('git-forge.abortMerge', () => this.abortOperation()),
       workspace.onDidSaveTextDocument(() => this.checkForConflicts()),
       window.onDidChangeWindowState(state => state.focused && this.checkForConflicts()),
+      this.repositories.onDidChangeRepositories(() => {
+        this.selectedPath = undefined
+        this.lastConflictKey = ''
+        void this.postCurrentSnapshot()
+      }),
       {
         dispose: () => {
           if (this.pollTimer)
@@ -70,7 +81,7 @@ export class GitConflictController {
   }
 
   async open(pathToSelect?: string): Promise<void> {
-    const service = await this.currentService()
+    const service = await this.repositories.currentService()
     if (!service) {
       window.showInformationMessage('Open a Git repository before resolving conflicts.')
       return
@@ -82,7 +93,7 @@ export class GitConflictController {
   }
 
   private async sync(): Promise<void> {
-    const service = await this.currentService()
+    const service = await this.repositories.currentService()
     if (!service) {
       window.showInformationMessage('Open a Git repository before syncing.')
       return
@@ -110,7 +121,7 @@ export class GitConflictController {
   }
 
   private async abortOperation(): Promise<void> {
-    const service = await this.currentService()
+    const service = await this.repositories.currentService()
     if (!service)
       return
 
@@ -140,7 +151,7 @@ export class GitConflictController {
   }
 
   private async checkForConflicts(): Promise<void> {
-    const service = await this.currentService()
+    const service = await this.repositories.currentService()
     if (!service)
       return
 
@@ -194,7 +205,12 @@ export class GitConflictController {
   }
 
   private async handleMessage(message: ConflictMessage): Promise<void> {
-    const service = await this.currentService()
+    if (message.type === 'selectRepository' && message.root) {
+      await this.selectRepository(message.root)
+      return
+    }
+
+    const service = await this.repositories.currentService()
     if (!service)
       return
 
@@ -226,6 +242,17 @@ export class GitConflictController {
 
     if (message.type === 'abortOperation')
       await this.abortOperation()
+  }
+
+  private async selectRepository(root: string): Promise<void> {
+    const selected = await this.repositories.selectRepository(root)
+    if (!selected)
+      return
+
+    this.selectedPath = undefined
+    this.lastConflictKey = ''
+    await this.postCurrentSnapshot()
+    await commands.executeCommand('git-forge.refreshHistory').then(undefined, () => undefined)
   }
 
   private async saveResolution(service: GitService, filePath: string, content: string): Promise<void> {
@@ -269,13 +296,35 @@ export class GitConflictController {
     if (!this.panel)
       return
 
+    const selection = await this.repositories.selection()
     await this.panel.webview.postMessage({
       type: 'snapshot',
-      snapshot: await this.snapshot(service),
+      snapshot: await this.snapshot(service, selection.repositories, selection.selected?.root ?? service.root),
     })
   }
 
-  private async snapshot(service: GitService): Promise<ConflictSnapshot | EmptyConflictSnapshot> {
+  private async postCurrentSnapshot(): Promise<void> {
+    if (!this.panel)
+      return
+
+    const service = await this.repositories.currentService()
+    if (service) {
+      await this.postSnapshot(service)
+      return
+    }
+
+    const selection = await this.repositories.selection()
+    await this.panel.webview.postMessage({
+      type: 'snapshot',
+      snapshot: {
+        state: 'empty',
+        reason: 'Open a folder containing a Git repository before resolving conflicts.',
+        repositories: selection.repositories,
+      },
+    })
+  }
+
+  private async snapshot(service: GitService, repositories: RepositoryInfo[], selectedRepositoryRoot: string): Promise<ConflictSnapshot | EmptyConflictSnapshot> {
     const [status, operation] = await Promise.all([
       service.status(),
       service.currentOperation(),
@@ -285,6 +334,8 @@ export class GitConflictController {
       return {
         state: 'empty',
         reason: 'No conflicts in the current repository.',
+        repositories,
+        selectedRepositoryRoot,
       }
     }
 
@@ -299,6 +350,8 @@ export class GitConflictController {
       state: 'ready',
       root: service.root,
       repoName: path.basename(service.root),
+      repositories,
+      selectedRepositoryRoot,
       operation,
       conflicts: status.conflicts.map(conflict => ({
         ...conflict,
@@ -315,18 +368,6 @@ export class GitConflictController {
     hash.update('\0')
     hash.update(conflicts.map(conflict => `${conflict.index}${conflict.worktree}:${conflict.path}`).sort().join('\0'))
     return hash.digest('hex')
-  }
-
-  private async currentService(): Promise<GitService | undefined> {
-    const activeUri = window.activeTextEditor?.document.uri
-    if (activeUri?.scheme === 'file') {
-      const folder = workspace.getWorkspaceFolder(activeUri)
-      if (folder)
-        return GitService.fromWorkspace(folder.uri.fsPath)
-    }
-
-    const firstFolder = workspace.workspaceFolders?.[0]
-    return firstFolder ? GitService.fromWorkspace(firstFolder.uri.fsPath) : undefined
   }
 
   private html(webview: Webview): string {

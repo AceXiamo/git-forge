@@ -39,6 +39,13 @@ interface GitCounts {
   conflicted: number
 }
 
+interface RepositoryOption {
+  root: string
+  name: string
+  label: string
+  description: string
+}
+
 interface GitChange {
   path: string
   originalPath?: string
@@ -109,6 +116,8 @@ interface ReadySnapshot {
   state: 'ready'
   root: string
   repoName: string
+  repositories: RepositoryOption[]
+  selectedRepositoryRoot: string
   branch: BranchStatus
   operation: GitOperation
   changes: GitChange[]
@@ -123,6 +132,8 @@ interface ReadySnapshot {
 interface EmptySnapshot {
   state: 'empty'
   reason: string
+  repositories: RepositoryOption[]
+  selectedRepositoryRoot?: string
 }
 
 type DetailsSnapshot = ReadySnapshot | EmptySnapshot
@@ -211,6 +222,153 @@ function Icon({ name, className }: { name: keyof typeof solarIcons, className?: 
       aria-hidden="true"
       dangerouslySetInnerHTML={{ __html: icon.body }}
     />
+  )
+}
+
+function RepositorySelect({
+  className,
+  repositories,
+  selectedRoot,
+}: {
+  className?: string
+  repositories: RepositoryOption[]
+  selectedRoot?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [menuRect, setMenuRect] = useState<{ left: number, top: number, width: number }>()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  const selected = repositories.find(repository => repository.root === selectedRoot) ?? repositories[0]
+
+  function updateMenuRect(): void {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect)
+      return
+
+    const width = Math.min(360, Math.max(190, rect.width))
+    const menuHeight = Math.min(260, repositories.length * 38 + 8)
+    const below = window.innerHeight - rect.bottom
+    const above = rect.top
+    const top = below >= Math.min(menuHeight, 150) || below >= above
+      ? rect.bottom + 4
+      : Math.max(8, rect.top - menuHeight - 4)
+    const left = Math.min(
+      Math.max(8, rect.left),
+      Math.max(8, window.innerWidth - width - 8),
+    )
+
+    setMenuRect({ left, top, width })
+  }
+
+  useEffect(() => {
+    if (!open)
+      return
+
+    updateMenuRect()
+
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node))
+        return
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target))
+        return
+      setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape')
+        setOpen(false)
+    }
+    const reposition = () => updateMenuRect()
+
+    document.addEventListener('pointerdown', closeOnPointerDown, true)
+    document.addEventListener('keydown', closeOnEscape)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown, true)
+      document.removeEventListener('keydown', closeOnEscape)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [open, repositories.length])
+
+  if (!selected)
+    return null
+
+  if (repositories.length === 1) {
+    return (
+      <div className={cn('flex h-[26px] min-w-0 items-center gap-1.5 rounded border border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_74%,transparent)] px-2 text-[12px] text-[var(--fg)]', className)} title={selected.root}>
+        <Icon name="folder" className="text-[13px] text-[var(--muted)]" />
+        <span className="min-w-0 truncate">{selected.label}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('relative h-[26px] min-w-0', className)} title={selected.root}>
+      <button
+        ref={buttonRef}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={cn(
+          'grid h-[26px] w-full min-w-0 cursor-pointer grid-cols-[16px_minmax(0,1fr)_16px] items-center gap-1.5 rounded border border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_74%,transparent)] px-2 text-left text-[12px] text-[var(--fg)] outline-none hover:bg-[var(--hover)] focus:border-[color-mix(in_srgb,var(--blue)_58%,transparent)]',
+          open && 'border-[color-mix(in_srgb,var(--blue)_58%,transparent)] bg-[var(--hover)]',
+        )}
+        type="button"
+        onClick={() => {
+          updateMenuRect()
+          setOpen(value => !value)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            updateMenuRect()
+            setOpen(true)
+          }
+        }}
+      >
+        <Icon name="folder" className="text-[13px] text-[var(--muted)]" />
+        <span className="min-w-0 truncate font-semibold">{selected.label}</span>
+        <Icon name="chevronDown" className={cn('justify-self-end text-[12px] text-[var(--muted)] transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && menuRect && (
+        <div
+          ref={menuRef}
+          className="fixed z-[1000] max-h-[260px] overflow-auto rounded border border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_96%,#17141f)] p-1 text-[12px] text-[var(--fg)] shadow-[0_14px_34px_rgba(0,0,0,0.38)]"
+          role="listbox"
+          style={{ left: `${menuRect.left}px`, top: `${menuRect.top}px`, width: `${menuRect.width}px` }}
+        >
+          {repositories.map((repository) => {
+            const active = repository.root === selected.root
+            return (
+              <button
+                key={repository.root}
+                aria-selected={active}
+                className={cn(
+                  'grid min-h-[34px] w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)] items-center gap-2 rounded border-0 bg-transparent px-2 py-1 text-left text-[12px] text-[var(--fg)] outline-none hover:bg-[var(--hover)] focus-visible:bg-[var(--hover)]',
+                  active && 'bg-[color-mix(in_srgb,var(--selected)_70%,transparent)]',
+                )}
+                role="option"
+                title={repository.root}
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  if (repository.root !== selected.root)
+                    vscode.postMessage({ type: 'selectRepository', root: repository.root })
+                }}
+              >
+                <Icon name={active ? 'folderOpen' : 'folder'} className={cn('text-[13px]', active ? 'text-[var(--blue)]' : 'text-[var(--muted)]')} />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold">{repository.label}</span>
+                  {repository.description !== '.' && <span className="block truncate text-[10px] text-[var(--muted)]">{repository.description}</span>}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -372,7 +530,8 @@ function ReadyView({ snapshot, onHover, onHoverEnd }: ReadyViewProps) {
         style={{ gridTemplateColumns: `minmax(360px, 1fr) 6px minmax(280px, ${detailsWidth}px)` }}
       >
         <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
-          <div className="grid min-h-[38px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_76%,#17141f)] px-2 py-1.5">
+          <div className="grid min-h-[38px] grid-cols-[minmax(130px,220px)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_76%,#17141f)] px-2 py-1.5">
+            <RepositorySelect repositories={snapshot.repositories} selectedRoot={snapshot.selectedRepositoryRoot} />
             <div className="relative min-w-0">
               <Icon name="search" className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-[12px] text-[var(--muted)]" />
               <input
@@ -1503,7 +1662,7 @@ function DetailsAppWithSnapshot({ snapshot }: { snapshot: DetailsSnapshot }) {
   const [hover, setHover] = useState<HoverState>()
 
   if (snapshot.state === 'empty')
-    return <div className="grid h-screen place-items-center text-center text-[var(--muted)]">{snapshot.reason || 'No Git repository loaded.'}</div>
+    return <EmptyDetailsView snapshot={snapshot} />
 
   branchName = snapshot.branch.current
   return (
@@ -1511,6 +1670,17 @@ function DetailsAppWithSnapshot({ snapshot }: { snapshot: DetailsSnapshot }) {
       <ReadyView snapshot={snapshot} onHover={setHover} onHoverEnd={() => setHover(undefined)} />
       <HoverCard hover={hover} />
     </>
+  )
+}
+
+function EmptyDetailsView({ snapshot }: { snapshot: EmptySnapshot }) {
+  return (
+    <div className="grid h-screen place-items-center bg-[var(--bg)] px-4 text-center text-[var(--muted)]">
+      <div className="grid max-w-[360px] gap-3">
+        <RepositorySelect className="w-full" repositories={snapshot.repositories} selectedRoot={snapshot.selectedRepositoryRoot} />
+        <div>{snapshot.reason || 'No Git repository loaded.'}</div>
+      </div>
+    </div>
   )
 }
 
