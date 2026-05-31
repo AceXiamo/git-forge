@@ -83,6 +83,13 @@ textarea {
   background: var(--hover);
 }
 
+.soft-button:disabled,
+.primary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .primary-button {
   background: var(--accent);
   color: var(--accent-fg);
@@ -94,79 +101,255 @@ textarea {
 }
 
 .merge-scroll {
-  scrollbar-color: color-mix(in srgb, var(--blue) 72%, transparent) transparent;
+  scrollbar-color: var(--vscode-scrollbarSlider-background, color-mix(in srgb, var(--fg) 26%, transparent)) transparent;
 }
 
-.merge-code-block {
-  min-height: 20px;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: normal;
+.merge-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
 }
 
-.merge-conflict-block {
-  position: relative;
-  margin: 8px -8px;
-  border: 1px solid color-mix(in srgb, var(--orange) 46%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--orange) 14%, transparent);
+.merge-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+  background-color: var(--vscode-scrollbarSlider-background, color-mix(in srgb, var(--fg) 26%, transparent));
 }
 
-.merge-conflict-block.from-left {
-  border-right-color: color-mix(in srgb, var(--orange) 72%, transparent);
+.merge-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vscode-scrollbarSlider-hoverBackground, color-mix(in srgb, var(--fg) 38%, transparent));
 }
 
-.merge-conflict-block.from-right {
-  border-left-color: color-mix(in srgb, var(--orange) 72%, transparent);
+.merge-scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-.merge-conflict-block .merge-code-block {
-  padding: 8px;
+/* IDEA-style aligned three-pane merge view */
+.merge-pane {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 20px;
+  /* Breathing room so the last conflict can be scrolled up from the very bottom */
+  padding-bottom: 45vh;
 }
 
-.merge-gutter-actions {
-  position: absolute;
-  z-index: 2;
-  top: 0;
-  display: flex;
+.merge-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
-  height: 20px;
-  padding: 0 3px;
-  background: color-mix(in srgb, var(--orange) 42%, var(--panel));
-  color: var(--fg);
-  font-family: var(--vscode-font-family);
+  gap: 5px;
+  border-radius: 999px;
+  padding: 2px 9px;
   font-size: 11px;
-  transform: translateY(-50%);
+  font-weight: 600;
 }
 
-.merge-gutter-actions.right-edge {
-  right: 0;
-  border-radius: 3px 0 0 3px;
+.merge-pill--ok {
+  background: color-mix(in srgb, var(--success) 22%, transparent);
+  color: color-mix(in srgb, var(--success) 86%, #fff);
 }
 
-.merge-gutter-actions.left-edge {
+.merge-pill--warn {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.merge-row {
+  display: flex;
+  min-height: 20px;
+  white-space: pre;
+}
+
+.merge-row__no {
+  flex: none;
+  width: 44px;
+  padding-right: 10px;
+  text-align: right;
+  color: color-mix(in srgb, var(--fg) 36%, transparent);
+  user-select: none;
+}
+
+.merge-row__text {
+  flex: 1;
+  padding-right: 16px;
+}
+
+.merge-row.tone-ours {
+  background-color: color-mix(in srgb, var(--success) 15%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--success) 80%, transparent);
+}
+
+.merge-row.tone-theirs {
+  background-color: color-mix(in srgb, var(--blue) 20%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--blue) 85%, transparent);
+}
+
+/* Result lines keep the colour of the side they came from + a gutter stripe */
+.merge-row.tone-result-ours {
+  background-color: color-mix(in srgb, var(--success) 20%, transparent);
+  box-shadow: inset 3px 0 0 var(--success);
+}
+
+.merge-row.tone-result-theirs {
+  background-color: color-mix(in srgb, var(--blue) 24%, transparent);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.merge-row.tone-result {
+  background-color: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.merge-row.tone-unresolved {
+  background-color: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.merge-row.tone-removed {
+  background-color: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+/* Filler (a line missing on this side) keeps the block's tint + a faint hatch. */
+.merge-row.merge-row--filler {
+  box-shadow: none;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--fg) 7%, transparent) 0,
+    color-mix(in srgb, var(--fg) 7%, transparent) 1px,
+    transparent 1px,
+    transparent 6px
+  );
+}
+
+/* Once a block is resolved, drop the fill and keep only the dashed outline plus
+   the thin source-colour gutter stripe (IDEA-style). */
+.merge-region--resolved .merge-row {
+  background-color: transparent;
+}
+
+.merge-region--resolved .merge-row.merge-row--filler {
+  background-image: none;
+}
+
+.merge-region {
+  position: relative;
+}
+
+/* Dashed boundary lines at the top and bottom of every change block.
+   Pseudo-elements are used so they never shift row heights (keeps ribbons aligned). */
+.merge-region::before,
+.merge-region::after {
+  content: "";
+  position: absolute;
   left: 0;
-  border-radius: 0 3px 3px 0;
+  right: 0;
+  height: 0;
+  z-index: 1;
+  border-top: 1px dashed color-mix(in srgb, var(--fg) 32%, transparent);
+  pointer-events: none;
 }
 
-.merge-gutter-actions button {
-  display: grid;
-  place-items: center;
-  min-width: 18px;
+.merge-region::before {
+  top: 0;
+}
+
+.merge-region::after {
+  bottom: 0;
+}
+
+.merge-region--active::before,
+.merge-region--active::after {
+  border-top-color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+}
+
+.merge-region--active {
+  box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent);
+}
+
+/* Connector dividers between the three editors (IDEA-style ribbons + gutter actions) */
+.merge-divider {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 60%, var(--bg));
+}
+
+.merge-divider__inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  will-change: transform;
+}
+
+.merge-ribbons {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.ribbon {
+  stroke-width: 1;
+}
+
+.ribbon-ours {
+  fill: color-mix(in srgb, var(--success) 26%, transparent);
+  stroke: color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+.ribbon-theirs {
+  fill: color-mix(in srgb, var(--blue) 30%, transparent);
+  stroke: color-mix(in srgb, var(--blue) 60%, transparent);
+}
+
+.ribbon--active.ribbon-ours {
+  fill: color-mix(in srgb, var(--success) 42%, transparent);
+}
+
+.ribbon--active.ribbon-theirs {
+  fill: color-mix(in srgb, var(--blue) 48%, transparent);
+}
+
+/* Accept + ignore buttons grouped into one pill, like IDEA's gutter actions */
+.divider-actions {
+  position: absolute;
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel) 94%, #000);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 40%);
+  transform: translateX(-50%);
+}
+
+.divider-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
   height: 18px;
+  padding: 0;
   border: 0;
-  border-radius: 3px;
   background: transparent;
   color: var(--fg);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
   line-height: 1;
 }
 
-.merge-gutter-actions button:hover {
-  background: color-mix(in srgb, var(--fg) 16%, transparent);
+.divider-btn + .divider-btn {
+  border-left: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+.divider-btn:hover,
+.divider-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .log-backdrop {

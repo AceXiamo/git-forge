@@ -80,6 +80,16 @@ describe('conflict parser', () => {
     expect(resolveConflictChunks(chunks, { 0: 'theirs' })).toBe('before\ntheirs\nafter\n')
     expect(resolveConflictChunks(chunks, { 0: 'both' })).toBe('before\nours\ntheirs\nafter\n')
   })
+
+  it('keeps a line break between both sides when ours has no trailing newline', () => {
+    const chunks = parseConflictMarkers('<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature\n')
+    const conflict = chunks.find(chunk => chunk.type === 'conflict')
+    // Emulate an end-of-file conflict where the ours side has no trailing newline.
+    if (conflict?.type === 'conflict')
+      conflict.ours = 'ours'
+
+    expect(resolveConflictChunks(chunks, { 0: 'both' })).toBe('ours\ntheirs\n')
+  })
 })
 
 describe('git status parser', () => {

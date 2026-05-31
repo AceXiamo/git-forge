@@ -1,10 +1,18 @@
 import altArrowDownIcon from '@iconify/icons-solar/alt-arrow-down-line-duotone'
 import altArrowRightIcon from '@iconify/icons-solar/alt-arrow-right-line-duotone'
+import altArrowUpIcon from '@iconify/icons-solar/alt-arrow-up-line-duotone'
+import checkCircleIcon from '@iconify/icons-solar/check-circle-line-duotone'
+import closeCircleIcon from '@iconify/icons-solar/close-circle-line-duotone'
+import codeSquareIcon from '@iconify/icons-solar/code-square-line-duotone'
 import disketteIcon from '@iconify/icons-solar/diskette-line-duotone'
 import documentIcon from '@iconify/icons-solar/document-text-line-duotone'
+import doubleArrowLeftIcon from '@iconify/icons-solar/double-alt-arrow-left-line-duotone'
+import doubleArrowRightIcon from '@iconify/icons-solar/double-alt-arrow-right-line-duotone'
 import folderIcon from '@iconify/icons-solar/folder-line-duotone'
 import folderOpenIcon from '@iconify/icons-solar/folder-open-line-duotone'
+import penIcon from '@iconify/icons-solar/pen-new-square-line-duotone'
 import refreshIcon from '@iconify/icons-solar/refresh-circle-line-duotone'
+import restartIcon from '@iconify/icons-solar/restart-line-duotone'
 import dangerIcon from '@iconify/icons-solar/shield-warning-line-duotone'
 import { render } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
@@ -61,7 +69,9 @@ interface ChoiceConflictChunk {
 }
 
 type ConflictChunk = ContextConflictChunk | ChoiceConflictChunk
-type ConflictChoice = 'both' | 'none' | 'ours' | 'theirs'
+type Side = 'ours' | 'theirs'
+// undefined = unresolved, 'none' = take neither, Side[] = applied sides in click order (supports both)
+type Resolution = Side[] | 'none'
 
 interface ConflictDetail {
   filePath: string
@@ -113,17 +123,27 @@ interface SolarIconData {
   body: string
 }
 
+const LINE_HEIGHT = 20
 const vscode = acquireVsCodeApi()
 
 const solarIcons = {
+  acceptLeft: doubleArrowLeftIcon,
+  acceptRight: doubleArrowRightIcon,
   chevronDown: altArrowDownIcon,
   chevronRight: altArrowRightIcon,
   danger: dangerIcon,
   file: documentIcon,
   folder: folderIcon,
   folderOpen: folderOpenIcon,
+  ignore: closeCircleIcon,
+  navNext: altArrowDownIcon,
+  navPrev: altArrowUpIcon,
   refresh: refreshIcon,
+  resolved: checkCircleIcon,
+  reset: restartIcon,
   save: disketteIcon,
+  text: penIcon,
+  merge: codeSquareIcon,
 } satisfies Record<string, SolarIconData>
 
 function cn(...classes: Array<string | false | undefined>) {
@@ -174,7 +194,7 @@ function ConflictResolver({ snapshot }: { snapshot: ReadySnapshot }) {
   const tree = useMemo(() => buildTree(snapshot.conflicts), [snapshot.conflicts])
 
   return (
-    <main className="grid h-screen grid-cols-[280px_minmax(0,1fr)] bg-[var(--bg)] text-[var(--fg)]">
+    <main className="grid h-screen grid-cols-[260px_minmax(0,1fr)] bg-[var(--bg)] text-[var(--fg)]">
       <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_88%,#17141f)]">
         <header className="border-b border-[var(--border)] px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -198,16 +218,7 @@ function ConflictResolver({ snapshot }: { snapshot: ReadySnapshot }) {
       </aside>
 
       <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-        <header className="border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_74%,#17141f)] px-3 py-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{snapshot.detail?.filePath ?? 'Select a conflict'}</span>
-            <button className="danger-button" onClick={() => vscode.postMessage({ type: 'abortOperation' })}>Abort</button>
-          </div>
-          {snapshot.operation.note && (
-            <div className="mt-1 text-[11px] text-[var(--muted)]">{snapshot.operation.note}</div>
-          )}
-        </header>
-        <ConflictDetailView detail={snapshot.detail} />
+        <ConflictDetailView detail={snapshot.detail} operation={snapshot.operation} />
       </section>
     </main>
   )
@@ -254,189 +265,649 @@ function TreeItem({ node, selectedPath, depth = 0 }: { node: TreeNode, selectedP
   )
 }
 
-function ConflictDetailView({ detail }: { detail?: ConflictDetail }) {
-  const [result, setResult] = useState('')
-  const [choices, setChoices] = useState<Record<number, ConflictChoice>>({})
+function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, operation: GitOperation }) {
+  const [resolutions, setResolutions] = useState<Record<number, Resolution>>({})
+  const [draft, setDraft] = useState('')
+  const [mode, setMode] = useState<'merge' | 'text'>('merge')
+  const [activeId, setActiveId] = useState<number | undefined>(undefined)
+  const paneRefs = {
+    ours: useRef<HTMLDivElement>(null),
+    center: useRef<HTMLDivElement>(null),
+    theirs: useRef<HTMLDivElement>(null),
+  }
+
+  const conflictChunks = useMemo(
+    () => (detail?.chunks ?? []).filter((chunk): chunk is ChoiceConflictChunk => chunk.type === 'conflict'),
+    [detail?.chunks],
+  )
+  const layout = useMemo(() => buildLayout(detail?.chunks ?? [], resolutions), [detail?.chunks, resolutions])
 
   useEffect(() => {
-    setResult(detail?.current ?? '')
-    setChoices({})
+    setResolutions({})
+    setDraft(detail?.current ?? '')
+    setMode('merge')
+    setActiveId(conflictChunks[0]?.id)
   }, [detail?.filePath, detail?.current])
 
-  if (!detail) {
+  if (!detail)
     return <div className="grid place-items-center text-[var(--muted)]">Select a conflicted file.</div>
-  }
 
-  if (!detail.canResolveInline) {
-    return (
-      <div className="min-h-0 overflow-auto p-4">
-        <div className="mb-3 text-[13px] font-semibold">{detail.status}</div>
-        <div className="max-w-[720px] rounded border border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_72%,#17141f)] p-4 text-[12px] text-[var(--muted)]">
-          This conflict cannot be safely resolved in the inline text resolver. Use one side, or open a staged version for inspection.
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button className="soft-button" onClick={() => vscode.postMessage({ type: 'openSide', path: detail.filePath, side: 'ours' })}>Open ours</button>
-          <button className="soft-button" onClick={() => vscode.postMessage({ type: 'openSide', path: detail.filePath, side: 'theirs' })}>Open theirs</button>
-          <button className="soft-button" onClick={() => vscode.postMessage({ type: 'acceptSide', path: detail.filePath, side: 'ours' })}>Keep ours</button>
-          <button className="soft-button" onClick={() => vscode.postMessage({ type: 'acceptSide', path: detail.filePath, side: 'theirs' })}>Keep theirs</button>
-        </div>
-      </div>
-    )
-  }
+  if (!detail.canResolveInline)
+    return <FallbackResolver detail={detail} />
 
-  const conflictChunks = detail.chunks.filter((chunk): chunk is ChoiceConflictChunk => chunk.type === 'conflict')
+  const resolvedCount = conflictChunks.filter(chunk => resolutions[chunk.id] !== undefined).length
+  const total = conflictChunks.length
+  const allResolved = resolvedCount === total
 
-  const applyChoice = (chunk: ChoiceConflictChunk, choice: ConflictChoice) => {
-    const nextChoices = {
-      ...choices,
-      [chunk.id]: choice,
+  const scrollToConflict = (id: number) => {
+    const target = paneRefs.center.current?.querySelector<HTMLElement>(`[data-cid="${id}"]`)
+    if (!target)
+      return
+    const top = Math.max(0, target.offsetTop - LINE_HEIGHT * 2)
+    for (const ref of Object.values(paneRefs)) {
+      if (ref.current)
+        ref.current.scrollTop = top
     }
-    setChoices(nextChoices)
-    setResult(resolveChunks(detail.chunks, nextChoices))
+  }
+
+  const focusConflict = (id: number) => {
+    setActiveId(id)
+    scrollToConflict(id)
+  }
+
+  const setResolution = (id: number, value: Resolution | undefined) => {
+    setResolutions((prev) => {
+      const next = { ...prev }
+      if (value === undefined)
+        delete next[id]
+      else
+        next[id] = value
+      return next
+    })
+  }
+
+  // Toggle a side into the result. Clicking ours then theirs keeps both (in click order); clicking again removes it.
+  const toggleSide = (id: number, side: Side) => {
+    const current = resolutions[id]
+    const order = Array.isArray(current) ? current : []
+    const next = order.includes(side) ? order.filter(item => item !== side) : [...order, side]
+    setResolution(id, next.length ? next : undefined)
+  }
+
+  const setAll = (side: Side) => {
+    const next: Record<number, Resolution> = {}
+    for (const chunk of conflictChunks)
+      next[chunk.id] = [side]
+    setResolutions(next)
+  }
+
+  const navigate = (direction: -1 | 1) => {
+    if (!total)
+      return
+    const index = conflictChunks.findIndex(chunk => chunk.id === activeId)
+    const nextIndex = (index + direction + total) % total
+    focusConflict(conflictChunks[nextIndex].id)
+  }
+
+  const save = () => {
+    const content = mode === 'text' ? draft : resolveChunks(detail.chunks, resolutions)
+    vscode.postMessage({ type: 'saveResolution', path: detail.filePath, content })
+  }
+
+  const toggleMode = () => {
+    if (mode === 'merge') {
+      setDraft(resolveChunks(detail.chunks, resolutions))
+      setMode('text')
+    }
+    else {
+      setMode('merge')
+    }
   }
 
   return (
     <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-[var(--border)] px-3 py-2 text-[12px]">
-        <span className="mr-auto text-[var(--muted)]">
-          {`${conflictChunks.length} conflict blocks`}
+      <header className="flex min-w-0 flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_74%,#17141f)] px-3 py-2">
+        <span className="min-w-0 max-w-[40%] truncate text-[13px] font-semibold" title={detail.filePath}>{detail.filePath}</span>
+        <span className={cn('merge-pill', allResolved ? 'merge-pill--ok' : 'merge-pill--warn')}>
+          <Icon name={allResolved ? 'resolved' : 'danger'} />
+          {`Resolved ${resolvedCount} / ${total}`}
         </span>
-        <button className="soft-button" onClick={() => setResult(detail.ours)}>Use all ours</button>
-        <button className="soft-button" onClick={() => setResult(detail.theirs)}>Use all theirs</button>
-        <button className="primary-button" onClick={() => vscode.postMessage({ type: 'saveResolution', path: detail.filePath, content: result })}>
-          <Icon name="save" />
-          Save resolution
-        </button>
-      </div>
+        <div className="ml-auto flex items-center gap-1">
+          <button className="icon-button" title="Previous conflict" disabled={mode === 'text'} onClick={() => navigate(-1)}>
+            <Icon name="navPrev" />
+          </button>
+          <button className="icon-button" title="Next conflict" disabled={mode === 'text'} onClick={() => navigate(1)}>
+            <Icon name="navNext" />
+          </button>
+          <span className="mx-1 h-4 w-px bg-[var(--border)]" />
+          <button className="soft-button" title="Accept all left (ours)" disabled={mode === 'text'} onClick={() => setAll('ours')}>Accept ours</button>
+          <button className="soft-button" title="Accept all right (theirs)" disabled={mode === 'text'} onClick={() => setAll('theirs')}>Accept theirs</button>
+          <button className="soft-button" title="Toggle plain text editing" onClick={toggleMode}>
+            <Icon name={mode === 'merge' ? 'text' : 'merge'} />
+            {mode === 'merge' ? 'Text' : 'Merge'}
+          </button>
+          <button className="danger-button" onClick={() => vscode.postMessage({ type: 'abortOperation' })}>Abort</button>
+          <button className="primary-button" onClick={save}>
+            <Icon name="save" />
+            Save
+          </button>
+        </div>
+        {operation.note && (
+          <div className="basis-full text-[11px] text-[var(--muted)]">{operation.note}</div>
+        )}
+      </header>
 
-      <SyncedMergeEditor
-        chunks={detail.chunks}
-        result={result}
-        onAccept={applyChoice}
-        onResultChange={setResult}
-      />
+      {mode === 'text'
+        ? (
+            <textarea
+              className="min-h-0 resize-none bg-[color-mix(in_srgb,var(--bg)_96%,#17141f)] p-3 [font-family:var(--vscode-editor-font-family)] text-[12px] leading-5 text-[var(--fg)] outline-none"
+              spellcheck={false}
+              value={draft}
+              onInput={event => setDraft(event.currentTarget.value)}
+            />
+          )
+        : (
+            <MergeEditor
+              layout={layout}
+              activeId={activeId}
+              oursLabel={conflictChunks[0]?.oursLabel ?? 'Local'}
+              theirsLabel={conflictChunks[0]?.theirsLabel ?? 'Incoming'}
+              paneRefs={paneRefs}
+              resolutions={resolutions}
+              onToggleSide={toggleSide}
+              onSetResolution={setResolution}
+              onFocusConflict={focusConflict}
+            />
+          )}
     </div>
   )
 }
 
-function SyncedMergeEditor({
-  chunks,
-  onAccept,
-  onResultChange,
-  result,
-}: {
-  chunks: ConflictChunk[]
-  result: string
-  onAccept: (chunk: ChoiceConflictChunk, choice: ConflictChoice) => void
-  onResultChange: (value: string) => void
-}) {
-  const oursRef = useRef<HTMLDivElement>(null)
-  const resultRef = useRef<HTMLTextAreaElement>(null)
-  const theirsRef = useRef<HTMLDivElement>(null)
-  const syncingRef = useRef(false)
+function FallbackResolver({ detail }: { detail: ConflictDetail }) {
+  return (
+    <div className="min-h-0 overflow-auto p-4">
+      <div className="mb-3 text-[13px] font-semibold">{detail.status}</div>
+      <div className="max-w-[720px] rounded border border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_72%,#17141f)] p-4 text-[12px] text-[var(--muted)]">
+        This conflict cannot be safely resolved in the inline text resolver. Use one side, or open a staged version for inspection.
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="soft-button" onClick={() => vscode.postMessage({ type: 'openSide', path: detail.filePath, side: 'ours' })}>Open ours</button>
+        <button className="soft-button" onClick={() => vscode.postMessage({ type: 'openSide', path: detail.filePath, side: 'theirs' })}>Open theirs</button>
+        <button className="soft-button" onClick={() => vscode.postMessage({ type: 'acceptSide', path: detail.filePath, side: 'ours' })}>Keep ours</button>
+        <button className="soft-button" onClick={() => vscode.postMessage({ type: 'acceptSide', path: detail.filePath, side: 'theirs' })}>Keep theirs</button>
+      </div>
+    </div>
+  )
+}
 
-  function syncScroll(source: HTMLElement): void {
+interface PaneRefs {
+  ours: { current: HTMLDivElement | null }
+  center: { current: HTMLDivElement | null }
+  theirs: { current: HTMLDivElement | null }
+}
+
+const DIVIDER_W = 46
+
+function MergeEditor({
+  layout,
+  activeId,
+  oursLabel,
+  theirsLabel,
+  paneRefs,
+  resolutions,
+  onToggleSide,
+  onSetResolution,
+  onFocusConflict,
+}: {
+  layout: MergeLayout
+  activeId?: number
+  oursLabel: string
+  theirsLabel: string
+  paneRefs: PaneRefs
+  resolutions: Record<number, Resolution>
+  onToggleSide: (id: number, side: Side) => void
+  onSetResolution: (id: number, value: Resolution | undefined) => void
+  onFocusConflict: (id: number) => void
+}) {
+  const syncingRef = useRef(false)
+  const scrollTopRef = useRef(0)
+  const dividerRefs = {
+    left: useRef<HTMLDivElement>(null),
+    right: useRef<HTMLDivElement>(null),
+  }
+
+  // Single source of vertical scroll keeps the three editors and the connector
+  // ribbons perfectly aligned; ribbons live in non-scrolling columns and are
+  // translated manually to avoid re-rendering the SVG on every scroll tick.
+  const syncScroll = (source: HTMLElement) => {
     if (syncingRef.current)
       return
-
-    const maxScroll = source.scrollHeight - source.clientHeight
-    const ratio = maxScroll > 0 ? source.scrollTop / maxScroll : 0
     syncingRef.current = true
-    ;[oursRef.current, resultRef.current, theirsRef.current].forEach((target) => {
-      if (!target || target === source)
-        return
-
-      const targetMaxScroll = target.scrollHeight - target.clientHeight
-      target.scrollTop = targetMaxScroll > 0 ? targetMaxScroll * ratio : 0
-    })
+    scrollTopRef.current = source.scrollTop
+    for (const ref of [paneRefs.ours.current, paneRefs.center.current, paneRefs.theirs.current]) {
+      if (ref && ref !== source)
+        ref.scrollTop = source.scrollTop
+    }
+    for (const ref of [dividerRefs.left.current, dividerRefs.right.current]) {
+      if (ref)
+        ref.style.transform = `translateY(${-source.scrollTop}px)`
+    }
     requestAnimationFrame(() => {
       syncingRef.current = false
     })
   }
 
   return (
-    <div className="grid min-h-0 grid-cols-3 gap-px overflow-hidden bg-[var(--border)]">
-      <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[var(--bg)]">
-        <div className="border-b border-[var(--border)] px-3 py-2 text-[12px] font-semibold">Ours</div>
-        <div
-          ref={oursRef}
-          className="merge-scroll min-h-0 overflow-auto"
-          onScroll={event => syncScroll(event.currentTarget)}
-        >
-          <ChunkPane chunks={chunks} side="ours" onAccept={onAccept} />
-        </div>
-      </section>
+    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+      <div
+        className="grid border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--panel)_60%,#17141f)]"
+        style={{ gridTemplateColumns: `minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr)` }}
+      >
+        <PaneHeader title="Local" subtitle={oursLabel} />
+        <div />
+        <PaneHeader title="Result" />
+        <div />
+        <PaneHeader title="Incoming" subtitle={theirsLabel} />
+      </div>
 
-      <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[var(--bg)]">
-        <div className="border-b border-[var(--border)] px-3 py-2 text-[12px] font-semibold">Result</div>
-        <textarea
-          ref={resultRef}
-          className="merge-scroll min-h-0 resize-none bg-[color-mix(in_srgb,var(--bg)_96%,#17141f)] p-3 [font-family:var(--vscode-editor-font-family)] text-[12px] leading-5 text-[var(--fg)] outline-none"
-          spellcheck={false}
-          value={result}
-          onInput={event => onResultChange(event.currentTarget.value)}
-          onScroll={event => syncScroll(event.currentTarget)}
+      <div
+        className="grid min-h-0 overflow-hidden"
+        style={{ gridTemplateColumns: `minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr) ${DIVIDER_W}px minmax(0,1fr)` }}
+      >
+        <MergePane side="ours" layout={layout} activeId={activeId} scrollRef={paneRefs.ours} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
+        <MergeDivider
+          kind="left"
+          layout={layout}
+          activeId={activeId}
+          resolutions={resolutions}
+          innerRef={dividerRefs.left}
+          scrollTopRef={scrollTopRef}
+          onToggleSide={onToggleSide}
+          onSetResolution={onSetResolution}
+          onFocusConflict={onFocusConflict}
         />
-      </section>
-
-      <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[var(--bg)]">
-        <div className="border-b border-[var(--border)] px-3 py-2 text-[12px] font-semibold">Theirs</div>
-        <div
-          ref={theirsRef}
-          className="merge-scroll min-h-0 overflow-auto"
-          onScroll={event => syncScroll(event.currentTarget)}
-        >
-          <ChunkPane chunks={chunks} side="theirs" onAccept={onAccept} />
-        </div>
-      </section>
+        <MergePane side="center" layout={layout} activeId={activeId} scrollRef={paneRefs.center} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
+        <MergeDivider
+          kind="right"
+          layout={layout}
+          activeId={activeId}
+          resolutions={resolutions}
+          innerRef={dividerRefs.right}
+          scrollTopRef={scrollTopRef}
+          onToggleSide={onToggleSide}
+          onSetResolution={onSetResolution}
+          onFocusConflict={onFocusConflict}
+        />
+        <MergePane side="theirs" layout={layout} activeId={activeId} scrollRef={paneRefs.theirs} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
+      </div>
     </div>
   )
 }
 
-function ChunkPane({
-  chunks,
-  onAccept,
-  side,
-}: {
-  chunks: ConflictChunk[]
-  side: 'ours' | 'theirs'
-  onAccept: (chunk: ChoiceConflictChunk, choice: ConflictChoice) => void
-}) {
+function PaneHeader({ title, subtitle }: { title: string, subtitle?: string }) {
   return (
-    <div className="min-w-max p-3 [font-family:var(--vscode-editor-font-family)] text-[12px] leading-5">
-      {chunks.map((chunk, index) => {
-        if (chunk.type === 'context') {
-          return (
-            <pre key={`context-${index}`} className="merge-code-block text-[color-mix(in_srgb,var(--fg)_72%,transparent)]">
-              {chunk.content || '\n'}
-            </pre>
-          )
-        }
-
-        const value = side === 'ours' ? chunk.ours : chunk.theirs
-        return (
-          <section key={chunk.id} className={cn('merge-conflict-block', side === 'ours' ? 'from-left' : 'from-right')}>
-            <div className={cn('merge-gutter-actions', side === 'ours' ? 'right-edge' : 'left-edge')}>
-              {side === 'ours'
-                ? (
-                    <>
-                      <button type="button" title="Ignore this block" onClick={() => onAccept(chunk, 'none')}>×</button>
-                      <button type="button" title="Apply ours to result" onClick={() => onAccept(chunk, 'ours')}>»</button>
-                    </>
-                  )
-                : (
-                    <>
-                      <button type="button" title="Apply theirs to result" onClick={() => onAccept(chunk, 'theirs')}>«</button>
-                      <button type="button" title="Ignore this block" onClick={() => onAccept(chunk, 'none')}>×</button>
-                    </>
-                  )}
-            </div>
-            <pre className="merge-code-block text-[var(--fg)]">{value || '\n'}</pre>
-          </section>
-        )
-      })}
+    <div className="flex items-baseline gap-2 px-3 py-2">
+      <span className="text-[12px] font-semibold">{title}</span>
+      {subtitle && <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{subtitle}</span>}
     </div>
   )
+}
+
+function MergePane({
+  side,
+  layout,
+  activeId,
+  scrollRef,
+  onScroll,
+  onFocusConflict,
+}: {
+  side: MergeSide
+  layout: MergeLayout
+  activeId?: number
+  scrollRef: { current: HTMLDivElement | null }
+  onScroll: (source: HTMLElement) => void
+  onFocusConflict: (id: number) => void
+}) {
+  return (
+    <div
+      ref={scrollRef}
+      className="merge-scroll merge-pane min-h-0 overflow-auto border-r border-[var(--border)]"
+      onScroll={event => onScroll(event.currentTarget)}
+    >
+      {layout.groups.map(group => (
+        group.kind === 'context'
+          ? <ContextGroup key={group.key} rows={group[side]} />
+          : (
+              <div
+                key={group.key}
+                className={cn(
+                  'merge-region',
+                  group.conflictId === activeId && 'merge-region--active',
+                  !group.unresolved && 'merge-region--resolved',
+                )}
+                data-cid={group.conflictId}
+                onMouseDown={() => onFocusConflict(group.conflictId!)}
+              >
+                {group[side].map((row, index) => <RowView key={index} row={row} />)}
+              </div>
+            )
+      ))}
+    </div>
+  )
+}
+
+function ContextGroup({ rows }: { rows: MergeRow[] }) {
+  return (
+    <div>
+      {rows.map((row, index) => <RowView key={index} row={row} />)}
+    </div>
+  )
+}
+
+function MergeDivider({
+  kind,
+  layout,
+  activeId,
+  resolutions,
+  innerRef,
+  scrollTopRef,
+  onToggleSide,
+  onSetResolution,
+  onFocusConflict,
+}: {
+  kind: 'left' | 'right'
+  layout: MergeLayout
+  activeId?: number
+  resolutions: Record<number, Resolution>
+  innerRef: { current: HTMLDivElement | null }
+  scrollTopRef: { current: number }
+  onToggleSide: (id: number, side: Side) => void
+  onSetResolution: (id: number, value: Resolution | undefined) => void
+  onFocusConflict: (id: number) => void
+}) {
+  const side: Side = kind === 'left' ? 'ours' : 'theirs'
+  return (
+    <div className="merge-divider border-r border-[var(--border)]">
+      <div
+        ref={innerRef}
+        className="merge-divider__inner"
+        style={{ height: `${layout.totalHeight}px`, transform: `translateY(${-scrollTopRef.current}px)` }}
+      >
+        <svg className="merge-ribbons" width={DIVIDER_W} height={layout.totalHeight} aria-hidden="true">
+          {layout.regions.map(region => (
+            <polygon
+              key={region.id}
+              className={cn(`ribbon ribbon-${side}`, region.id === activeId && 'ribbon--active')}
+              points={ribbonPoints(kind, region)}
+            />
+          ))}
+        </svg>
+        {layout.regions.map(region => (
+          <DividerActions
+            key={region.id}
+            side={side}
+            region={region}
+            resolution={resolutions[region.id]}
+            onToggleSide={onToggleSide}
+            onSetResolution={onSetResolution}
+            onFocusConflict={onFocusConflict}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DividerActions({
+  side,
+  region,
+  resolution,
+  onToggleSide,
+  onSetResolution,
+  onFocusConflict,
+}: {
+  side: Side
+  region: MergeRegion
+  resolution?: Resolution
+  onToggleSide: (id: number, side: Side) => void
+  onSetResolution: (id: number, value: Resolution | undefined) => void
+  onFocusConflict: (id: number) => void
+}) {
+  const active = isSideActive(resolution, side)
+  const arrowTitle = side === 'ours' ? 'Accept left (ours)' : 'Accept right (theirs)'
+  const acceptSide = () => {
+    onFocusConflict(region.id)
+    onToggleSide(region.id, side)
+  }
+  const ignoreSide = () => {
+    onFocusConflict(region.id)
+    onSetResolution(region.id, 'none')
+  }
+
+  return (
+    <div className="divider-actions" style={{ top: `${region.top}px` }}>
+      <button
+        type="button"
+        className={cn('divider-btn', active && 'is-active')}
+        title={active ? `${arrowTitle} — applied (click to remove)` : arrowTitle}
+        onClick={acceptSide}
+      >
+        <Icon name={side === 'ours' ? 'acceptRight' : 'acceptLeft'} />
+      </button>
+      <button
+        type="button"
+        className="divider-btn"
+        title="Ignore this change"
+        onClick={ignoreSide}
+      >
+        <Icon name="ignore" />
+      </button>
+    </div>
+  )
+}
+
+function isSideActive(resolution: Resolution | undefined, side: Side): boolean {
+  return Array.isArray(resolution) && resolution.includes(side)
+}
+
+function ribbonPoints(kind: 'left' | 'right', region: MergeRegion): string {
+  const { top } = region
+  const w = DIVIDER_W
+  if (kind === 'left')
+    return `0,${top} 0,${region.oursBottom} ${w},${region.centerBottom} ${w},${top}`
+  return `0,${top} 0,${region.centerBottom} ${w},${region.theirsBottom} ${w},${top}`
+}
+
+function RowView({ row }: { row: MergeRow }) {
+  return (
+    <div className={cn('merge-row', `tone-${row.tone}`, row.filler && 'merge-row--filler')}>
+      <span className="merge-row__no">{row.lineNo ?? ''}</span>
+      <span className="merge-row__text">{row.filler ? '' : (row.text || ' ')}</span>
+    </div>
+  )
+}
+
+type MergeSide = 'ours' | 'center' | 'theirs'
+type MergeTone = 'ctx' | 'ours' | 'theirs' | 'result' | 'result-ours' | 'result-theirs' | 'unresolved' | 'removed'
+
+interface MergeRow {
+  text: string
+  lineNo: number | null
+  tone: MergeTone
+  filler: boolean
+}
+
+interface MergeGroup {
+  key: string
+  kind: 'context' | 'conflict'
+  conflictId?: number
+  chunk?: ChoiceConflictChunk
+  rowCount: number
+  oursCount: number
+  centerCount: number
+  theirsCount: number
+  unresolved: boolean
+  ours: MergeRow[]
+  center: MergeRow[]
+  theirs: MergeRow[]
+}
+
+interface MergeRegion {
+  id: number
+  top: number
+  oursBottom: number
+  centerBottom: number
+  theirsBottom: number
+}
+
+interface MergeLayout {
+  groups: MergeGroup[]
+  regions: MergeRegion[]
+  totalHeight: number
+}
+
+function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolution>): MergeLayout {
+  const groups: MergeGroup[] = []
+  const regions: MergeRegion[] = []
+  const counters = { ours: 0, center: 0, theirs: 0 }
+  let row = 0
+
+  chunks.forEach((chunk, index) => {
+    if (chunk.type === 'context') {
+      const group = buildContextGroup(chunk, index, counters)
+      groups.push(group)
+      row += group.rowCount
+      return
+    }
+
+    const group = buildConflictGroup(chunk, resolutions[chunk.id], counters)
+    groups.push(group)
+    const top = row * LINE_HEIGHT
+    // For unresolved blocks, stretch the center band to the full region height
+    // so the connector ribbons clearly point at the still-open conflict.
+    const centerRows = group.unresolved ? group.rowCount : group.centerCount
+    regions.push({
+      id: chunk.id,
+      top,
+      oursBottom: top + group.oursCount * LINE_HEIGHT,
+      centerBottom: top + centerRows * LINE_HEIGHT,
+      theirsBottom: top + group.theirsCount * LINE_HEIGHT,
+    })
+    row += group.rowCount
+  })
+
+  return { groups, regions, totalHeight: row * LINE_HEIGHT }
+}
+
+function buildContextGroup(
+  chunk: ContextConflictChunk,
+  index: number,
+  counters: { ours: number, center: number, theirs: number },
+): MergeGroup {
+  const lines = splitForDisplay(chunk.content)
+  const ours: MergeRow[] = []
+  const center: MergeRow[] = []
+  const theirs: MergeRow[] = []
+
+  for (const text of lines) {
+    ours.push({ text, lineNo: ++counters.ours, tone: 'ctx', filler: false })
+    center.push({ text, lineNo: ++counters.center, tone: 'ctx', filler: false })
+    theirs.push({ text, lineNo: ++counters.theirs, tone: 'ctx', filler: false })
+  }
+
+  return { key: `ctx-${index}`, kind: 'context', rowCount: lines.length, oursCount: lines.length, centerCount: lines.length, theirsCount: lines.length, unresolved: false, ours, center, theirs }
+}
+
+function buildConflictGroup(
+  chunk: ChoiceConflictChunk,
+  resolution: Resolution | undefined,
+  counters: { ours: number, center: number, theirs: number },
+): MergeGroup {
+  const oursLines = splitForDisplay(chunk.ours)
+  const theirsLines = splitForDisplay(chunk.theirs)
+  const centerSegs = resolvedSegments(oursLines, theirsLines, resolution)
+  const fillerTone: MergeTone = resolution === undefined ? 'unresolved' : resolution === 'none' ? 'removed' : 'result'
+  const height = Math.max(oursLines.length, theirsLines.length, centerSegs.length, 1)
+
+  return {
+    key: `cf-${chunk.id}`,
+    kind: 'conflict',
+    conflictId: chunk.id,
+    chunk,
+    rowCount: height,
+    oursCount: oursLines.length,
+    centerCount: centerSegs.length,
+    theirsCount: theirsLines.length,
+    unresolved: resolution === undefined,
+    ours: padRows(oursLines, height, 'ours', counters, 'ours'),
+    center: buildCenterRows(centerSegs, height, fillerTone, counters),
+    theirs: padRows(theirsLines, height, 'theirs', counters, 'theirs'),
+  }
+}
+
+interface CenterSegment {
+  text: string
+  source: Side
+}
+
+// Each resolved result line keeps its origin so the center pane can colour and
+// stripe ours- vs theirs-derived lines, making the merged content obvious.
+function resolvedSegments(oursLines: string[], theirsLines: string[], resolution: Resolution | undefined): CenterSegment[] {
+  if (!Array.isArray(resolution))
+    return []
+  return resolution.flatMap(side =>
+    (side === 'ours' ? oursLines : theirsLines).map(text => ({ text, source: side })),
+  )
+}
+
+function buildCenterRows(
+  segments: CenterSegment[],
+  height: number,
+  fillerTone: MergeTone,
+  counters: { ours: number, center: number, theirs: number },
+): MergeRow[] {
+  const rows: MergeRow[] = []
+  for (let i = 0; i < height; i += 1) {
+    if (i < segments.length) {
+      const segment = segments[i]
+      rows.push({
+        text: segment.text,
+        lineNo: ++counters.center,
+        tone: segment.source === 'ours' ? 'result-ours' : 'result-theirs',
+        filler: false,
+      })
+    }
+    else {
+      rows.push({ text: '', lineNo: null, tone: fillerTone, filler: true })
+    }
+  }
+  return rows
+}
+
+function padRows(
+  lines: string[],
+  height: number,
+  tone: MergeTone,
+  counters: { ours: number, center: number, theirs: number },
+  counterKey: 'ours' | 'center' | 'theirs',
+): MergeRow[] {
+  const rows: MergeRow[] = []
+  for (let i = 0; i < height; i += 1) {
+    if (i < lines.length)
+      rows.push({ text: lines[i], lineNo: ++counters[counterKey], tone, filler: false })
+    else
+      rows.push({ text: '', lineNo: null, tone, filler: true })
+  }
+  return rows
+}
+
+function splitForDisplay(text: string): string[] {
+  if (!text)
+    return []
+  const parts = text.split('\n')
+  if (parts.length > 1 && parts[parts.length - 1] === '')
+    parts.pop()
+  return parts
 }
 
 function buildTree(files: ConflictFile[]): TreeNode[] {
@@ -479,18 +950,17 @@ function sortTree(nodes: TreeNode[]): TreeNode[] {
     }))
 }
 
-function resolveChunks(chunks: ConflictChunk[], choices: Record<number, ConflictChoice>): string {
+function resolveChunks(chunks: ConflictChunk[], resolutions: Record<number, Resolution>): string {
   return chunks.map((chunk) => {
     if (chunk.type === 'context')
       return chunk.content
-    if (choices[chunk.id] === 'ours')
-      return chunk.ours
-    if (choices[chunk.id] === 'theirs')
-      return chunk.theirs
-    if (choices[chunk.id] === 'both')
-      return `${chunk.ours}${chunk.theirs}`
-    if (choices[chunk.id] === 'none')
+
+    const resolution = resolutions[chunk.id]
+    if (resolution === 'none')
       return ''
+    if (Array.isArray(resolution))
+      return joinSides(resolution.map(side => (side === 'ours' ? chunk.ours : chunk.theirs)))
+
     return [
       `<<<<<<< ${chunk.oursLabel}\n`,
       chunk.ours,
@@ -500,6 +970,16 @@ function resolveChunks(chunks: ConflictChunk[], choices: Record<number, Conflict
       `>>>>>>> ${chunk.theirsLabel}\n`,
     ].join('')
   }).join('')
+}
+
+// Concatenate accepted sides; insert a newline between parts when the previous
+// side has no trailing newline (e.g. an end-of-file conflict) so lines never merge.
+function joinSides(parts: string[]): string {
+  return parts.reduce((acc, part) => {
+    if (acc && !acc.endsWith('\n') && part)
+      return `${acc}\n${part}`
+    return acc + part
+  }, '')
 }
 
 render(<App />, document.querySelector('#app')!)

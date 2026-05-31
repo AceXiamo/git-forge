@@ -110,7 +110,7 @@ export function resolveConflictChunks(chunks: ConflictChunk[], choices: Record<n
     if (choice === 'theirs')
       return chunk.theirs
     if (choice === 'both')
-      return `${chunk.ours}${chunk.theirs}`
+      return joinSides(chunk.ours, chunk.theirs)
 
     return [
       `<<<<<<< ${chunk.oursLabel}\n`,
@@ -121,6 +121,14 @@ export function resolveConflictChunks(chunks: ConflictChunk[], choices: Record<n
       `>>>>>>> ${chunk.theirsLabel}\n`,
     ].join('')
   }).join('')
+}
+
+// Keep both sides on separate lines even when the first side has no trailing
+// newline (typical for end-of-file conflicts), so accepting both never merges lines.
+function joinSides(ours: string, theirs: string): string {
+  if (ours && theirs && !ours.endsWith('\n'))
+    return `${ours}\n${theirs}`
+  return `${ours}${theirs}`
 }
 
 function splitPreserveNewline(content: string): string[] {
