@@ -2,7 +2,7 @@
   "publisher": "acexiamo",
   "name": "git-forge",
   "displayName": "Git Forge",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "packageManager": "pnpm@10.27.0",
   "description": "A compact Git history, branch status, and conflict resolver for VS Code Source Control.",

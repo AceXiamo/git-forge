@@ -77,8 +77,9 @@ interface ChoiceConflictChunk {
 
 type ConflictChunk = ContextConflictChunk | ChoiceConflictChunk
 type Side = 'ours' | 'theirs'
-// undefined = unresolved, 'none' = take neither, Side[] = applied sides in click order (supports both)
-type Resolution = Side[] | 'none'
+// undefined = no result choice yet, Side[] = applied sides in click order (supports both)
+type Resolution = Side[]
+type SideHandling = Partial<Record<Side, boolean>>
 
 interface ConflictDetail {
   filePath: string
@@ -425,6 +426,7 @@ function TreeItem({ node, selectedPath, depth = 0 }: { node: TreeNode, selectedP
 
 function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, operation: GitOperation }) {
   const [resolutions, setResolutions] = useState<Record<number, Resolution>>({})
+  const [handledSides, setHandledSides] = useState<Record<number, SideHandling>>({})
   const [draft, setDraft] = useState('')
   const [mode, setMode] = useState<'merge' | 'text'>('merge')
   const [activeId, setActiveId] = useState<number | undefined>(undefined)
@@ -438,10 +440,11 @@ function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, op
     () => (detail?.chunks ?? []).filter((chunk): chunk is ChoiceConflictChunk => chunk.type === 'conflict'),
     [detail?.chunks],
   )
-  const layout = useMemo(() => buildLayout(detail?.chunks ?? [], resolutions), [detail?.chunks, resolutions])
+  const layout = useMemo(() => buildLayout(detail?.chunks ?? [], resolutions, handledSides), [detail?.chunks, handledSides, resolutions])
 
   useEffect(() => {
     setResolutions({})
+    setHandledSides({})
     setDraft(detail?.current ?? '')
     setMode('merge')
     setActiveId(conflictChunks[0]?.id)
@@ -468,9 +471,10 @@ function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, op
     }
   }
 
-  const focusConflict = (id: number) => {
+  const focusConflict = (id: number, options: FocusConflictOptions = {}) => {
     setActiveId(id)
-    scrollToConflict(id)
+    if (options.scroll)
+      scrollToConflict(id)
   }
 
   const setResolution = (id: number, value: Resolution | undefined) => {
@@ -484,12 +488,41 @@ function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, op
     })
   }
 
+  const setSideHandled = (id: number, side: Side, value: boolean) => {
+    setHandledSides((prev) => {
+      const next = { ...prev }
+      const current = { ...(next[id] ?? {}) }
+      if (value)
+        current[side] = true
+      else
+        delete current[side]
+
+      if (current.ours || current.theirs)
+        next[id] = current
+      else
+        delete next[id]
+      return next
+    })
+  }
+
   // Toggle a side into the result. Clicking ours then theirs keeps both (in click order); clicking again removes it.
   const toggleSide = (id: number, side: Side) => {
     const current = resolutions[id]
     const order = Array.isArray(current) ? current : []
     const next = order.includes(side) ? order.filter(item => item !== side) : [...order, side]
+    if (!order.includes(side))
+      setSideHandled(id, side, false)
     setResolution(id, next.length ? next : undefined)
+  }
+
+  const ignoreSide = (id: number, side: Side) => {
+    const order = resolutions[id] ?? []
+    const next = order.filter(item => item !== side)
+    const otherSide: Side = side === 'ours' ? 'theirs' : 'ours'
+    const otherHandled = next.includes(otherSide) || isSideHandled(handledSides[id], otherSide)
+
+    setSideHandled(id, side, true)
+    setResolution(id, next.length || otherHandled ? next : undefined)
   }
 
   const setAll = (side: Side) => {
@@ -504,7 +537,7 @@ function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, op
       return
     const index = conflictChunks.findIndex(chunk => chunk.id === activeId)
     const nextIndex = (index + direction + total) % total
-    focusConflict(conflictChunks[nextIndex].id)
+    focusConflict(conflictChunks[nextIndex].id, { scroll: true })
   }
 
   const save = () => {
@@ -572,8 +605,9 @@ function ConflictDetailView({ detail, operation }: { detail?: ConflictDetail, op
               theirsLabel={conflictChunks[0]?.theirsLabel ?? 'Incoming'}
               paneRefs={paneRefs}
               resolutions={resolutions}
+              handledSides={handledSides}
               onToggleSide={toggleSide}
-              onSetResolution={setResolution}
+              onIgnoreSide={ignoreSide}
               onFocusConflict={focusConflict}
             />
           )}
@@ -606,6 +640,10 @@ interface PaneRefs {
 
 const DIVIDER_W = 46
 
+interface FocusConflictOptions {
+  scroll?: boolean
+}
+
 function MergeEditor({
   layout,
   activeId,
@@ -613,8 +651,9 @@ function MergeEditor({
   theirsLabel,
   paneRefs,
   resolutions,
+  handledSides,
   onToggleSide,
-  onSetResolution,
+  onIgnoreSide,
   onFocusConflict,
 }: {
   layout: MergeLayout
@@ -623,9 +662,10 @@ function MergeEditor({
   theirsLabel: string
   paneRefs: PaneRefs
   resolutions: Record<number, Resolution>
+  handledSides: Record<number, SideHandling>
   onToggleSide: (id: number, side: Side) => void
-  onSetResolution: (id: number, value: Resolution | undefined) => void
-  onFocusConflict: (id: number) => void
+  onIgnoreSide: (id: number, side: Side) => void
+  onFocusConflict: (id: number, options?: FocusConflictOptions) => void
 }) {
   const syncingRef = useRef(false)
   const scrollTopRef = useRef(0)
@@ -681,10 +721,11 @@ function MergeEditor({
           layout={layout}
           activeId={activeId}
           resolutions={resolutions}
+          handledSides={handledSides}
           innerRef={dividerRefs.left}
           scrollTopRef={scrollTopRef}
           onToggleSide={onToggleSide}
-          onSetResolution={onSetResolution}
+          onIgnoreSide={onIgnoreSide}
           onFocusConflict={onFocusConflict}
         />
         <MergePane side="center" layout={layout} activeId={activeId} scrollRef={paneRefs.center} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
@@ -693,10 +734,11 @@ function MergeEditor({
           layout={layout}
           activeId={activeId}
           resolutions={resolutions}
+          handledSides={handledSides}
           innerRef={dividerRefs.right}
           scrollTopRef={scrollTopRef}
           onToggleSide={onToggleSide}
-          onSetResolution={onSetResolution}
+          onIgnoreSide={onIgnoreSide}
           onFocusConflict={onFocusConflict}
         />
         <MergePane side="theirs" layout={layout} activeId={activeId} scrollRef={paneRefs.theirs} onScroll={syncScroll} onFocusConflict={onFocusConflict} />
@@ -727,7 +769,7 @@ function MergePane({
   activeId?: number
   scrollRef: { current: HTMLDivElement | null }
   onScroll: (source: HTMLElement) => void
-  onFocusConflict: (id: number) => void
+  onFocusConflict: (id: number, options?: FocusConflictOptions) => void
 }) {
   return (
     <div className="merge-pane-wrap border-r border-[var(--border)]">
@@ -740,22 +782,49 @@ function MergePane({
           group.kind === 'context'
             ? <ContextGroup key={group.key} rows={group[side]} />
             : (
-                <div
+                <ConflictRegion
                   key={group.key}
-                  className={cn(
-                    'merge-region',
-                    group.conflictId === activeId && 'merge-region--active',
-                    isSideSettled(group, side) && 'merge-region--resolved',
-                  )}
-                  data-cid={group.conflictId}
-                  onMouseDown={() => onFocusConflict(group.conflictId!)}
-                >
-                  {group[side].map((row, index) => <RowView key={index} row={row} />)}
-                </div>
+                  active={group.conflictId === activeId}
+                  group={group}
+                  rows={group[side]}
+                  settled={isSideSettled(group, side)}
+                  onFocusConflict={onFocusConflict}
+                />
               )
         ))}
       </div>
       <OverviewRuler layout={layout} activeId={activeId} onJump={onFocusConflict} />
+    </div>
+  )
+}
+
+function ConflictRegion({
+  active,
+  group,
+  rows,
+  settled,
+  onFocusConflict,
+}: {
+  active: boolean
+  group: MergeGroup
+  rows: MergeRow[]
+  settled: boolean
+  onFocusConflict: (id: number, options?: FocusConflictOptions) => void
+}) {
+  const spacerRows = Math.max(0, group.rowCount - rows.length)
+
+  return (
+    <div className="merge-conflict-group" data-cid={group.conflictId} onMouseDown={() => onFocusConflict(group.conflictId!)}>
+      <div
+        className={cn(
+          'merge-region',
+          active && 'merge-region--active',
+          settled && 'merge-region--resolved',
+        )}
+      >
+        {rows.map((row, index) => <RowView key={index} row={row} />)}
+      </div>
+      {spacerRows > 0 && <div className="merge-spacer" style={{ height: `${spacerRows * LINE_HEIGHT}px` }} />}
     </div>
   )
 }
@@ -767,7 +836,7 @@ function OverviewRuler({
 }: {
   layout: MergeLayout
   activeId?: number
-  onJump: (id: number) => void
+  onJump: (id: number, options?: FocusConflictOptions) => void
 }) {
   // The scroll content has a 45vh bottom padding, so include it in the total
   // height to keep ruler ticks aligned with the actual conflict positions.
@@ -788,7 +857,7 @@ function OverviewRuler({
             )}
             style={{ top: `${top}%`, height: `${height}%` }}
             title={region.resolved ? 'Resolved conflict' : 'Unresolved conflict'}
-            onClick={() => onJump(region.id)}
+            onClick={() => onJump(region.id, { scroll: true })}
           />
         )
       })}
@@ -809,21 +878,23 @@ function MergeDivider({
   layout,
   activeId,
   resolutions,
+  handledSides,
   innerRef,
   scrollTopRef,
   onToggleSide,
-  onSetResolution,
+  onIgnoreSide,
   onFocusConflict,
 }: {
   kind: 'left' | 'right'
   layout: MergeLayout
   activeId?: number
   resolutions: Record<number, Resolution>
+  handledSides: Record<number, SideHandling>
   innerRef: { current: HTMLDivElement | null }
   scrollTopRef: { current: number }
   onToggleSide: (id: number, side: Side) => void
-  onSetResolution: (id: number, value: Resolution | undefined) => void
-  onFocusConflict: (id: number) => void
+  onIgnoreSide: (id: number, side: Side) => void
+  onFocusConflict: (id: number, options?: FocusConflictOptions) => void
 }) {
   const side: Side = kind === 'left' ? 'ours' : 'theirs'
   return (
@@ -834,13 +905,15 @@ function MergeDivider({
         style={{ height: `${layout.totalHeight}px`, transform: `translateY(${-scrollTopRef.current}px)` }}
       >
         <svg className="merge-ribbons" width={DIVIDER_W} height={layout.totalHeight} aria-hidden="true">
-          {layout.regions.map(region => (
-            <polygon
-              key={region.id}
-              className={cn(`ribbon ribbon-${side}`, region.id === activeId && 'ribbon--active')}
-              points={ribbonPoints(kind, region)}
-            />
-          ))}
+          {layout.regions.flatMap(region =>
+            ribbonShapes(kind, region, side).map((shape, index) => (
+              <polygon
+                key={`${region.id}-${index}`}
+                className={cn(`ribbon ribbon-${shape.source}`, region.id === activeId && 'ribbon--active')}
+                points={shape.points}
+              />
+            )),
+          )}
         </svg>
         {layout.regions.map(region => (
           <DividerActions
@@ -848,8 +921,9 @@ function MergeDivider({
             side={side}
             region={region}
             resolution={resolutions[region.id]}
+            handled={isSideHandled(handledSides[region.id], side)}
             onToggleSide={onToggleSide}
-            onSetResolution={onSetResolution}
+            onIgnoreSide={onIgnoreSide}
             onFocusConflict={onFocusConflict}
           />
         ))}
@@ -862,16 +936,18 @@ function DividerActions({
   side,
   region,
   resolution,
+  handled,
   onToggleSide,
-  onSetResolution,
+  onIgnoreSide,
   onFocusConflict,
 }: {
   side: Side
   region: MergeRegion
   resolution?: Resolution
+  handled: boolean
   onToggleSide: (id: number, side: Side) => void
-  onSetResolution: (id: number, value: Resolution | undefined) => void
-  onFocusConflict: (id: number) => void
+  onIgnoreSide: (id: number, side: Side) => void
+  onFocusConflict: (id: number, options?: FocusConflictOptions) => void
 }) {
   const active = isSideActive(resolution, side)
   const arrowTitle = side === 'ours' ? 'Accept left (ours)' : 'Accept right (theirs)'
@@ -881,33 +957,54 @@ function DividerActions({
   }
   const ignoreSide = () => {
     onFocusConflict(region.id)
-    onSetResolution(region.id, 'none')
+    onIgnoreSide(region.id, side)
   }
+  const acceptButton = (
+    <button
+      type="button"
+      className={cn('divider-btn', active && 'is-active')}
+      title={active ? `${arrowTitle} — applied (click to remove)` : arrowTitle}
+      onClick={acceptSide}
+    >
+      <Icon name={side === 'ours' ? 'acceptRight' : 'acceptLeft'} />
+    </button>
+  )
+  const ignoreButton = (
+    <button
+      type="button"
+      className={cn('divider-btn', handled && 'is-active')}
+      title={handled ? 'Ignored side — handled' : 'Ignore this side'}
+      onClick={ignoreSide}
+    >
+      <Icon name="ignore" />
+    </button>
+  )
 
   return (
     <div className="divider-actions" style={{ top: `${region.top}px` }}>
-      <button
-        type="button"
-        className={cn('divider-btn', active && 'is-active')}
-        title={active ? `${arrowTitle} — applied (click to remove)` : arrowTitle}
-        onClick={acceptSide}
-      >
-        <Icon name={side === 'ours' ? 'acceptRight' : 'acceptLeft'} />
-      </button>
-      <button
-        type="button"
-        className="divider-btn"
-        title="Ignore this change"
-        onClick={ignoreSide}
-      >
-        <Icon name="ignore" />
-      </button>
+      {side === 'ours'
+        ? (
+            <>
+              {ignoreButton}
+              {acceptButton}
+            </>
+          )
+        : (
+            <>
+              {acceptButton}
+              {ignoreButton}
+            </>
+          )}
     </div>
   )
 }
 
 function isSideActive(resolution: Resolution | undefined, side: Side): boolean {
   return Array.isArray(resolution) && resolution.includes(side)
+}
+
+function isSideHandled(handling: SideHandling | undefined, side: Side): boolean {
+  return Boolean(handling?.[side])
 }
 
 function isSideSettled(group: MergeGroup, side: MergeSide): boolean {
@@ -918,12 +1015,39 @@ function isSideSettled(group: MergeGroup, side: MergeSide): boolean {
   return group.centerSettled
 }
 
-function ribbonPoints(kind: 'left' | 'right', region: MergeRegion): string {
+function ribbonShapes(kind: 'left' | 'right', region: MergeRegion, fallbackSource: Side): Array<{ source: Side, points: string }> {
+  if (!region.sourceSegments.length)
+    return [{ source: fallbackSource, points: fullRibbonPoints(kind, region) }]
+
+  return region.sourceSegments.map(segment => ({
+    source: segment.source,
+    points: ribbonSegmentPoints(kind, region, segment),
+  }))
+}
+
+function fullRibbonPoints(kind: 'left' | 'right', region: MergeRegion): string {
   const { top } = region
   const w = DIVIDER_W
   if (kind === 'left')
     return `0,${top} 0,${region.oursBottom} ${w},${region.centerBottom} ${w},${top}`
   return `0,${top} 0,${region.centerBottom} ${w},${region.theirsBottom} ${w},${top}`
+}
+
+function ribbonSegmentPoints(kind: 'left' | 'right', region: MergeRegion, segment: MergeSourceSegment): string {
+  const w = DIVIDER_W
+  const sideBottom = kind === 'left' ? region.oursBottom : region.theirsBottom
+  const sideTop = mapRibbonY(segment.top, region.top, region.centerBottom, region.top, sideBottom)
+  const sideEnd = mapRibbonY(segment.bottom, region.top, region.centerBottom, region.top, sideBottom)
+  if (kind === 'left')
+    return `0,${sideTop} 0,${sideEnd} ${w},${segment.bottom} ${w},${segment.top}`
+  return `0,${segment.top} 0,${segment.bottom} ${w},${sideEnd} ${w},${sideTop}`
+}
+
+function mapRibbonY(value: number, fromTop: number, fromBottom: number, toTop: number, toBottom: number): number {
+  if (fromBottom <= fromTop)
+    return toTop
+  const ratio = (value - fromTop) / (fromBottom - fromTop)
+  return toTop + (toBottom - toTop) * ratio
 }
 
 function RowView({ row }: { row: MergeRow }) {
@@ -960,9 +1084,22 @@ interface MergeGroup {
   oursSettled: boolean
   centerSettled: boolean
   theirsSettled: boolean
+  sourceSegments: ResultSourceSegment[]
   ours: MergeRow[]
   center: MergeRow[]
   theirs: MergeRow[]
+}
+
+interface ResultSourceSegment {
+  source: Side
+  start: number
+  end: number
+}
+
+interface MergeSourceSegment {
+  source: Side
+  top: number
+  bottom: number
 }
 
 interface MergeRegion {
@@ -973,6 +1110,7 @@ interface MergeRegion {
   centerBottom: number
   theirsBottom: number
   resolved: boolean
+  sourceSegments: MergeSourceSegment[]
 }
 
 interface MergeLayout {
@@ -981,7 +1119,7 @@ interface MergeLayout {
   totalHeight: number
 }
 
-function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolution>): MergeLayout {
+function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolution>, handledSides: Record<number, SideHandling>): MergeLayout {
   const groups: MergeGroup[] = []
   const regions: MergeRegion[] = []
   const counters = { ours: 0, center: 0, theirs: 0 }
@@ -995,7 +1133,7 @@ function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolu
       return
     }
 
-    const group = buildConflictGroup(chunk, resolutions[chunk.id], counters)
+    const group = buildConflictGroup(chunk, resolutions[chunk.id], handledSides[chunk.id], counters)
     groups.push(group)
     const top = row * LINE_HEIGHT
     // For unresolved blocks, stretch the center band to the full region height
@@ -1009,6 +1147,11 @@ function buildLayout(chunks: ConflictChunk[], resolutions: Record<number, Resolu
       centerBottom: top + centerRows * LINE_HEIGHT,
       theirsBottom: top + group.theirsCount * LINE_HEIGHT,
       resolved: !group.unresolved,
+      sourceSegments: group.sourceSegments.map(segment => ({
+        source: segment.source,
+        top: top + segment.start * LINE_HEIGHT,
+        bottom: top + segment.end * LINE_HEIGHT,
+      })),
     })
     row += group.rowCount
   })
@@ -1032,20 +1175,27 @@ function buildContextGroup(
     theirs.push({ text, lineNo: ++counters.theirs, tone: 'ctx', filler: false })
   }
 
-  return { key: `ctx-${index}`, kind: 'context', rowCount: lines.length, oursCount: lines.length, centerCount: lines.length, theirsCount: lines.length, unresolved: false, oursSettled: false, centerSettled: false, theirsSettled: false, ours, center, theirs }
+  return { key: `ctx-${index}`, kind: 'context', rowCount: lines.length, oursCount: lines.length, centerCount: lines.length, theirsCount: lines.length, unresolved: false, oursSettled: false, centerSettled: false, theirsSettled: false, sourceSegments: [], ours, center, theirs }
 }
 
 function buildConflictGroup(
   chunk: ChoiceConflictChunk,
   resolution: Resolution | undefined,
+  handled: SideHandling | undefined,
   counters: { ours: number, center: number, theirs: number },
 ): MergeGroup {
   const oursLines = splitForDisplay(chunk.ours)
   const theirsLines = splitForDisplay(chunk.theirs)
   const centerSegs = resolvedSegments(oursLines, theirsLines, resolution)
-  const fillerTone: MergeTone = resolution === undefined ? 'unresolved' : resolution === 'none' ? 'removed' : 'result'
-  const height = Math.max(oursLines.length, theirsLines.length, centerSegs.length, 1)
-  const ignored = resolution === 'none'
+  const sourceSegments = resultSourceSegments(centerSegs)
+  const fillerTone: MergeTone = resolution === undefined ? 'unresolved' : centerSegs.length ? 'result' : 'removed'
+  const centerHeight = resolution === undefined
+    ? Math.max(oursLines.length, theirsLines.length, 1)
+    : Math.max(centerSegs.length, 1)
+  const ours = buildSideRows(oursLines, 'ours', counters, 'ours')
+  const center = buildCenterRows(centerSegs, centerHeight, fillerTone, counters)
+  const theirs = buildSideRows(theirsLines, 'theirs', counters, 'theirs')
+  const height = Math.max(ours.length, center.length, theirs.length, 1)
 
   return {
     key: `cf-${chunk.id}`,
@@ -1053,16 +1203,17 @@ function buildConflictGroup(
     conflictId: chunk.id,
     chunk,
     rowCount: height,
-    oursCount: oursLines.length,
-    centerCount: centerSegs.length,
-    theirsCount: theirsLines.length,
+    oursCount: ours.length,
+    centerCount: center.length,
+    theirsCount: theirs.length,
     unresolved: resolution === undefined,
-    oursSettled: ignored || isSideActive(resolution, 'ours'),
-    theirsSettled: ignored || isSideActive(resolution, 'theirs'),
+    oursSettled: isSideActive(resolution, 'ours') || isSideHandled(handled, 'ours'),
+    theirsSettled: isSideActive(resolution, 'theirs') || isSideHandled(handled, 'theirs'),
     centerSettled: resolution !== undefined,
-    ours: padRows(oursLines, height, 'ours', counters, 'ours'),
-    center: buildCenterRows(centerSegs, height, fillerTone, counters),
-    theirs: padRows(theirsLines, height, 'theirs', counters, 'theirs'),
+    sourceSegments,
+    ours,
+    center,
+    theirs,
   }
 }
 
@@ -1079,6 +1230,19 @@ function resolvedSegments(oursLines: string[], theirsLines: string[], resolution
   return resolution.flatMap(side =>
     (side === 'ours' ? oursLines : theirsLines).map(text => ({ text, source: side })),
   )
+}
+
+function resultSourceSegments(segments: CenterSegment[]): ResultSourceSegment[] {
+  const result: ResultSourceSegment[] = []
+  for (const [index, segment] of segments.entries()) {
+    const previous = result[result.length - 1]
+    if (previous?.source === segment.source) {
+      previous.end = index + 1
+      continue
+    }
+    result.push({ source: segment.source, start: index, end: index + 1 })
+  }
+  return result
 }
 
 function buildCenterRows(
@@ -1105,20 +1269,15 @@ function buildCenterRows(
   return rows
 }
 
-function padRows(
+function buildSideRows(
   lines: string[],
-  height: number,
   tone: MergeTone,
   counters: { ours: number, center: number, theirs: number },
   counterKey: 'ours' | 'center' | 'theirs',
 ): MergeRow[] {
   const rows: MergeRow[] = []
-  for (let i = 0; i < height; i += 1) {
-    if (i < lines.length)
-      rows.push({ text: lines[i], lineNo: ++counters[counterKey], tone, filler: false })
-    else
-      rows.push({ text: '', lineNo: null, tone, filler: true })
-  }
+  for (const line of lines)
+    rows.push({ text: line, lineNo: ++counters[counterKey], tone, filler: false })
   return rows
 }
 
@@ -1177,8 +1336,6 @@ function resolveChunks(chunks: ConflictChunk[], resolutions: Record<number, Reso
       return chunk.content
 
     const resolution = resolutions[chunk.id]
-    if (resolution === 'none')
-      return ''
     if (Array.isArray(resolution))
       return joinSides(resolution.map(side => (side === 'ours' ? chunk.ours : chunk.theirs)))
 
